@@ -100,6 +100,7 @@
 #![feature(const_cow_is_borrowed)]
 #![feature(core_intrinsics)]
 #![feature(dispatch_from_dyn)]
+#![feature(deref_patterns_private)]
 #![feature(exact_size_is_empty)]
 #![feature(extend_one)]
 #![feature(fmt_internals)]

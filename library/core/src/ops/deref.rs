@@ -197,3 +197,16 @@ impl<T: ?Sized> Receiver for &T {}
 
 #[unstable(feature = "receiver_trait", issue = "none")]
 impl<T: ?Sized> Receiver for &mut T {}
+
+/// Indicates that a type can be dereferenced without side effects
+/// This is used for the `deref_patterns` feature.
+#[cfg_attr(bootstrap, lang = "deref_pure")]
+#[unstable(feature = "deref_patterns_private", issue = "none")]
+#[doc(hidden)]
+pub trait DerefPure: Deref {}
+
+#[unstable(feature = "deref_patterns", issue = "87121")]
+impl<T: ?Sized> DerefPure for &T {}
+
+#[unstable(feature = "deref_patterns", issue = "87121")]
+impl<T: ?Sized> DerefPure for &mut T {}

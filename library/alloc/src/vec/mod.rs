@@ -2411,6 +2411,9 @@ impl<T, A: Allocator> ops::DerefMut for Vec<T, A> {
     }
 }
 
+#[unstable(feature = "deref_patterns", issue = "87121")]
+impl<T, A: Allocator> ops::DerefPure for Vec<T, A> {}
+
 #[cfg(not(no_global_oom_handling))]
 trait SpecCloneFrom {
     fn clone_from(this: &mut Self, other: &Self);

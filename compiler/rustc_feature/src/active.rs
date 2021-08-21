@@ -700,6 +700,9 @@ declare_features! (
 
     /// Enables experimental inline assembly support for additional architectures.
     (active, asm_experimental_arch, "1.58.0", Some(72016), None),
+    /// Allows matching through the Deref trait
+    (incomplete, deref_patterns, "1.56.0", Some(87121), None),
+
 
     // -------------------------------------------------------------------------
     // feature-group-end: actual feature gates

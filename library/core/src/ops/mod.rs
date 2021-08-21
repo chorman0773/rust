@@ -166,6 +166,9 @@ pub use self::deref::{Deref, DerefMut};
 #[unstable(feature = "receiver_trait", issue = "none")]
 pub use self::deref::Receiver;
 
+#[unstable(feature = "deref_patterns_private", issue = "none")]
+pub use self::deref::DerefPure;
+
 #[stable(feature = "rust1", since = "1.0.0")]
 pub use self::drop::Drop;
 

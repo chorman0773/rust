@@ -18,7 +18,7 @@ use core::marker::{PhantomData, Unpin, Unsize};
 #[cfg(not(no_global_oom_handling))]
 use core::mem::size_of_val;
 use core::mem::{self, align_of_val_raw};
-use core::ops::{CoerceUnsized, Deref, DispatchFromDyn, Receiver};
+use core::ops::{CoerceUnsized, Deref, DerefPure, DispatchFromDyn, Receiver};
 use core::panic::{RefUnwindSafe, UnwindSafe};
 use core::pin::Pin;
 use core::ptr::{self, NonNull};
@@ -960,7 +960,11 @@ impl<T: ?Sized> Arc<T> {
         let cnt = this.inner().weak.load(SeqCst);
         // If the weak count is currently locked, the value of the
         // count was 0 just before taking the lock.
-        if cnt == usize::MAX { 0 } else { cnt - 1 }
+        if cnt == usize::MAX {
+            0
+        } else {
+            cnt - 1
+        }
     }
 
     /// Gets the number of strong (`Arc`) pointers to this allocation.
@@ -1354,6 +1358,9 @@ impl<T: ?Sized> Deref for Arc<T> {
         &self.inner().data
     }
 }
+
+#[unstable(feature = "deref_patterns", issue = "87121")]
+impl<T: ?Sized> DerefPure for Arc<T> {}
 
 #[unstable(feature = "receiver_trait", issue = "none")]
 impl<T: ?Sized> Receiver for Arc<T> {}
@@ -1911,7 +1918,11 @@ impl<T: ?Sized> Weak<T> {
     #[must_use]
     #[stable(feature = "weak_counts", since = "1.41.0")]
     pub fn strong_count(&self) -> usize {
-        if let Some(inner) = self.inner() { inner.strong.load(SeqCst) } else { 0 }
+        if let Some(inner) = self.inner() {
+            inner.strong.load(SeqCst)
+        } else {
+            0
+        }
     }
 
     /// Gets an approximation of the number of `Weak` pointers pointing to this

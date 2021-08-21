@@ -1,4 +1,4 @@
-use crate::ops::{Deref, DerefMut};
+use crate::ops::{Deref, DerefMut, DerefPure};
 use crate::ptr;
 
 /// A wrapper to inhibit compiler from automatically calling `T`’s destructor.
@@ -162,3 +162,6 @@ impl<T: ?Sized> const DerefMut for ManuallyDrop<T> {
         &mut self.value
     }
 }
+
+#[unstable(feature = "deref_patterns", issue = "87121")]
+impl<T: ?Sized> DerefPure for ManuallyDrop<T> {}

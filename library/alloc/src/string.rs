@@ -2333,6 +2333,9 @@ impl ops::DerefMut for String {
     }
 }
 
+#[unstable(feature = "deref_patterns", issue = "87121")]
+impl ops::DerefPure for String {}
+
 /// A type alias for [`Infallible`].
 ///
 /// This alias exists for backwards compatibility, and may be eventually deprecated.

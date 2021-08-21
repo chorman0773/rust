@@ -261,7 +261,7 @@ use core::marker::{self, PhantomData, Unpin, Unsize};
 #[cfg(not(no_global_oom_handling))]
 use core::mem::size_of_val;
 use core::mem::{self, align_of_val_raw, forget};
-use core::ops::{CoerceUnsized, Deref, DispatchFromDyn, Receiver};
+use core::ops::{CoerceUnsized, Deref, DerefPure, DispatchFromDyn, Receiver};
 use core::panic::{RefUnwindSafe, UnwindSafe};
 #[cfg(not(no_global_oom_handling))]
 use core::pin::Pin;
@@ -1038,7 +1038,11 @@ impl<T: ?Sized> Rc<T> {
     #[inline]
     #[stable(feature = "rc_unique", since = "1.4.0")]
     pub fn get_mut(this: &mut Self) -> Option<&mut T> {
-        if Rc::is_unique(this) { unsafe { Some(Rc::get_mut_unchecked(this)) } } else { None }
+        if Rc::is_unique(this) {
+            unsafe { Some(Rc::get_mut_unchecked(this)) }
+        } else {
+            None
+        }
     }
 
     /// Returns a mutable reference into the given `Rc`,
@@ -1415,6 +1419,9 @@ impl<T: ?Sized> Deref for Rc<T> {
         &self.inner().value
     }
 }
+
+#[unstable(feature = "deref_patterns", issue = "87121")]
+impl<T: ?Sized> DerefPure for Rc<T> {}
 
 #[unstable(feature = "receiver_trait", issue = "none")]
 impl<T: ?Sized> Receiver for Rc<T> {}
@@ -2253,7 +2260,11 @@ impl<T: ?Sized> Weak<T> {
     #[must_use]
     #[stable(feature = "weak_counts", since = "1.41.0")]
     pub fn strong_count(&self) -> usize {
-        if let Some(inner) = self.inner() { inner.strong() } else { 0 }
+        if let Some(inner) = self.inner() {
+            inner.strong()
+        } else {
+            0
+        }
     }
 
     /// Gets the number of `Weak` pointers pointing to this allocation.

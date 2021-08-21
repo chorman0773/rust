@@ -145,7 +145,7 @@ use core::iter::{FusedIterator, Iterator};
 use core::marker::{Unpin, Unsize};
 use core::mem;
 use core::ops::{
-    CoerceUnsized, Deref, DerefMut, DispatchFromDyn, Generator, GeneratorState, Receiver,
+    CoerceUnsized, Deref, DerefMut, DerefPure, DispatchFromDyn, Generator, GeneratorState, Receiver,
 };
 use core::pin::Pin;
 use core::ptr::{self, Unique};
@@ -1617,6 +1617,9 @@ impl<T: ?Sized, A: Allocator> DerefMut for Box<T, A> {
 
 #[unstable(feature = "receiver_trait", issue = "none")]
 impl<T: ?Sized, A: Allocator> Receiver for Box<T, A> {}
+
+#[unstable(feature = "deref_patterns", issue = "87121")]
+impl<T: ?Sized, A: Allocator> DerefPure for Box<T, A> {}
 
 #[stable(feature = "rust1", since = "1.0.0")]
 impl<I: Iterator + ?Sized, A: Allocator> Iterator for Box<I, A> {
