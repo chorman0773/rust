@@ -200,7 +200,7 @@ impl<T: ?Sized> Receiver for &mut T {}
 
 /// Indicates that a type can be dereferenced without side effects
 /// This is used for the `deref_patterns` feature.
-#[cfg_attr(bootstrap, lang = "deref_pure")]
+#[cfg_attr(not(bootstrap), lang = "deref_pure")]
 #[unstable(feature = "deref_patterns_private", issue = "none")]
 #[doc(hidden)]
 pub trait DerefPure: Deref {}
