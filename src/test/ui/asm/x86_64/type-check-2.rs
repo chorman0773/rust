@@ -1,6 +1,8 @@
 // only-x86_64
 
-#![feature(asm, repr_simd, never_type, asm_sym)]
+#![feature(repr_simd, never_type, asm_sym)]
+
+use std::arch::{asm, global_asm};
 
 #[repr(simd)]
 struct SimdNonCopy(f32, f32, f32, f32);
@@ -33,9 +35,7 @@ fn main() {
         asm!("{}", sym S);
         asm!("{}", sym main);
         asm!("{}", sym C);
-        //~^ ERROR asm `sym` operand must point to a fn or static
-        asm!("{}", sym x);
-        //~^ ERROR asm `sym` operand must point to a fn or static
+        //~^ ERROR invalid `sym` operand
 
         // Register operands must be Copy
 
@@ -78,3 +78,12 @@ fn main() {
         asm!("{}", in(reg) u);
     }
 }
+
+// Sym operands must point to a function or static
+
+const C: i32 = 0;
+static S: i32 = 0;
+global_asm!("{}", sym S);
+global_asm!("{}", sym main);
+global_asm!("{}", sym C);
+//~^ ERROR invalid `sym` operand

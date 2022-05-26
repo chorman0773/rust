@@ -59,7 +59,7 @@ pub enum PointerCast {
 ///    sized struct to a dynamically sized one. E.g., `&[i32; 4]` -> `&[i32]` is
 ///    represented by:
 ///
-///    ```
+///    ```ignore (illustrative)
 ///    Deref(None) -> [i32; 4],
 ///    Borrow(AutoBorrow::Ref) -> &[i32; 4],
 ///    Unsize -> &[i32],
@@ -83,7 +83,7 @@ pub struct Adjustment<'tcx> {
     pub target: Ty<'tcx>,
 }
 
-impl Adjustment<'tcx> {
+impl<'tcx> Adjustment<'tcx> {
     pub fn is_region_borrow(&self) -> bool {
         matches!(self.kind, Adjust::Borrow(AutoBorrow::Ref(..)))
     }

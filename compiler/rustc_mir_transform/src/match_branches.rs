@@ -14,7 +14,7 @@ pub struct MatchBranchSimplification;
 ///
 /// For example:
 ///
-/// ```rust
+/// ```ignore (MIR)
 /// bb0: {
 ///     switchInt(move _3) -> [42_isize: bb1, otherwise: bb2];
 /// }
@@ -32,7 +32,7 @@ pub struct MatchBranchSimplification;
 ///
 /// into:
 ///
-/// ```rust
+/// ```ignore (MIR)
 /// bb0: {
 ///    _2 = Eq(move _3, const 42_isize);
 ///    goto -> bb3;
@@ -40,11 +40,11 @@ pub struct MatchBranchSimplification;
 /// ```
 
 impl<'tcx> MirPass<'tcx> for MatchBranchSimplification {
-    fn run_pass(&self, tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
-        if tcx.sess.mir_opt_level() < 3 {
-            return;
-        }
+    fn is_enabled(&self, sess: &rustc_session::Session) -> bool {
+        sess.mir_opt_level() >= 3
+    }
 
+    fn run_pass(&self, tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
         let def_id = body.source.def_id();
         let param_env = tcx.param_env(def_id);
 

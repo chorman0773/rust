@@ -22,9 +22,10 @@ use core::str::next_code_point;
 
 use crate::borrow::Cow;
 use crate::char;
+use crate::collections::TryReserveError;
 use crate::fmt;
 use crate::hash::{Hash, Hasher};
-use crate::iter::FromIterator;
+use crate::iter::FusedIterator;
 use crate::mem;
 use crate::ops;
 use crate::rc::Rc;
@@ -231,9 +232,45 @@ impl Wtf8Buf {
         self.bytes.reserve(additional)
     }
 
+    /// Tries to reserve capacity for at least `additional` more length units
+    /// in the given `Wtf8Buf`. The `Wtf8Buf` may reserve more space to avoid
+    /// frequent reallocations. After calling `try_reserve`, capacity will be
+    /// greater than or equal to `self.len() + additional`. Does nothing if
+    /// capacity is already sufficient.
+    ///
+    /// # Errors
+    ///
+    /// If the capacity overflows, or the allocator reports a failure, then an error
+    /// is returned.
+    #[inline]
+    pub fn try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
+        self.bytes.try_reserve(additional)
+    }
+
     #[inline]
     pub fn reserve_exact(&mut self, additional: usize) {
         self.bytes.reserve_exact(additional)
+    }
+
+    /// Tries to reserve the minimum capacity for exactly `additional`
+    /// length units in the given `Wtf8Buf`. After calling
+    /// `try_reserve_exact`, capacity will be greater than or equal to
+    /// `self.len() + additional` if it returns `Ok(())`.
+    /// Does nothing if the capacity is already sufficient.
+    ///
+    /// Note that the allocator may give the `Wtf8Buf` more space than it
+    /// requests. Therefore, capacity can not be relied upon to be precisely
+    /// minimal. Prefer [`try_reserve`] if future insertions are expected.
+    ///
+    /// [`try_reserve`]: Wtf8Buf::try_reserve
+    ///
+    /// # Errors
+    ///
+    /// If the capacity overflows, or the allocator reports a failure, then an error
+    /// is returned.
+    #[inline]
+    pub fn try_reserve_exact(&mut self, additional: usize) -> Result<(), TryReserveError> {
+        self.bytes.try_reserve_exact(additional)
     }
 
     #[inline]
@@ -793,7 +830,7 @@ pub unsafe fn slice_unchecked(s: &Wtf8, begin: usize, end: usize) -> &Wtf8 {
 #[inline(never)]
 pub fn slice_error_fail(s: &Wtf8, begin: usize, end: usize) -> ! {
     assert!(begin <= end);
-    panic!("index {} and/or {} in `{:?}` do not lie on character boundary", begin, end, s);
+    panic!("index {begin} and/or {end} in `{s:?}` do not lie on character boundary");
 }
 
 /// Iterator for the code points of a WTF-8 string.
@@ -809,7 +846,8 @@ impl<'a> Iterator for Wtf8CodePoints<'a> {
 
     #[inline]
     fn next(&mut self) -> Option<CodePoint> {
-        next_code_point(&mut self.bytes).map(|c| CodePoint { value: c })
+        // SAFETY: `self.bytes` has been created from a WTF-8 string
+        unsafe { next_code_point(&mut self.bytes).map(|c| CodePoint { value: c }) }
     }
 
     #[inline]
@@ -860,6 +898,9 @@ impl<'a> Iterator for EncodeWide<'a> {
         (low + ext, high.and_then(|n| n.checked_mul(2)).and_then(|n| n.checked_add(ext)))
     }
 }
+
+#[stable(feature = "encode_wide_fused_iterator", since = "1.62.0")]
+impl FusedIterator for EncodeWide<'_> {}
 
 impl Hash for CodePoint {
     #[inline]

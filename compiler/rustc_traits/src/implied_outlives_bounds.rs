@@ -18,7 +18,7 @@ use rustc_trait_selection::traits::FulfillmentContext;
 use rustc_trait_selection::traits::TraitEngine;
 use smallvec::{smallvec, SmallVec};
 
-crate fn provide(p: &mut Providers) {
+pub(crate) fn provide(p: &mut Providers) {
     *p = Providers { implied_outlives_bounds, ..*p };
 }
 
@@ -128,9 +128,9 @@ fn compute_implied_outlives_bounds<'tcx>(
 
     // Ensure that those obligations that we had to solve
     // get solved *here*.
-    match fulfill_cx.select_all_or_error(infcx) {
-        Ok(()) => Ok(implied_bounds),
-        Err(_) => Err(NoSolution),
+    match fulfill_cx.select_all_or_error(infcx).as_slice() {
+        [] => Ok(implied_bounds),
+        _ => Err(NoSolution),
     }
 }
 
@@ -138,7 +138,7 @@ fn compute_implied_outlives_bounds<'tcx>(
 /// this down to determine what relationships would have to hold for
 /// `T: 'a` to hold. We get to assume that the caller has validated
 /// those relationships.
-fn implied_bounds_from_components(
+fn implied_bounds_from_components<'tcx>(
     sub_region: ty::Region<'tcx>,
     sup_components: SmallVec<[Component<'tcx>; 4]>,
 ) -> Vec<OutlivesBound<'tcx>> {

@@ -3,16 +3,18 @@
 
 use std::cell::RefCell;
 use std::ffi::CString;
-use std::lazy::{Lazy, SyncOnceCell};
 use std::os::raw::{c_char, c_int};
 use std::sync::{mpsc, Mutex};
 
-use cranelift_codegen::binemit::{NullStackMapSink, NullTrapSink};
 use rustc_codegen_ssa::CrateInfo;
 use rustc_middle::mir::mono::MonoItem;
 use rustc_session::Session;
+use rustc_span::Symbol;
 
 use cranelift_jit::{JITBuilder, JITModule};
+
+// FIXME use std::lazy::SyncOnceCell once it stabilizes
+use once_cell::sync::OnceCell;
 
 use crate::{prelude::*, BackendConfig};
 use crate::{CodegenCx, CodegenMode};
@@ -23,12 +25,11 @@ struct JitState {
 }
 
 thread_local! {
-    static LAZY_JIT_STATE: RefCell<Option<JitState>> = RefCell::new(None);
+    static LAZY_JIT_STATE: RefCell<Option<JitState>> = const { RefCell::new(None) };
 }
 
 /// The Sender owned by the rustc thread
-static GLOBAL_MESSAGE_SENDER: SyncOnceCell<Mutex<mpsc::Sender<UnsafeMessage>>> =
-    SyncOnceCell::new();
+static GLOBAL_MESSAGE_SENDER: OnceCell<Mutex<mpsc::Sender<UnsafeMessage>>> = OnceCell::new();
 
 /// A message that is sent from the jitted runtime to the rustc thread.
 /// Senders are responsible for upholding `Send` semantics.
@@ -50,12 +51,11 @@ impl UnsafeMessage {
     fn send(self) -> Result<(), mpsc::SendError<UnsafeMessage>> {
         thread_local! {
             /// The Sender owned by the local thread
-            static LOCAL_MESSAGE_SENDER: Lazy<mpsc::Sender<UnsafeMessage>> = Lazy::new(||
+            static LOCAL_MESSAGE_SENDER: mpsc::Sender<UnsafeMessage> =
                 GLOBAL_MESSAGE_SENDER
                     .get().unwrap()
                     .lock().unwrap()
-                    .clone()
-            );
+                    .clone();
         }
         LOCAL_MESSAGE_SENDER.with(|sender| sender.send(self))
     }
@@ -74,9 +74,16 @@ fn create_jit_module<'tcx>(
     jit_builder.hotswap(hotswap);
     crate::compiler_builtins::register_functions_for_jit(&mut jit_builder);
     jit_builder.symbols(imported_symbols);
+    jit_builder.symbol("__clif_jit_fn", clif_jit_fn as *const u8);
     let mut jit_module = JITModule::new(jit_builder);
 
-    let mut cx = crate::CodegenCx::new(tcx, backend_config.clone(), jit_module.isa(), false);
+    let mut cx = crate::CodegenCx::new(
+        tcx,
+        backend_config.clone(),
+        jit_module.isa(),
+        false,
+        Symbol::intern("dummy_cgu_name"),
+    );
 
     crate::allocator::codegen(tcx, &mut jit_module, &mut cx.unwind_context);
     crate::main_shim::maybe_create_entry_wrapper(
@@ -204,8 +211,7 @@ pub(crate) fn run_jit(tcx: TyCtxt<'_>, backend_config: BackendConfig) -> ! {
     }
 }
 
-#[no_mangle]
-extern "C" fn __clif_jit_fn(
+extern "C" fn clif_jit_fn(
     instance_ptr: *const Instance<'static>,
     trampoline_ptr: *const u8,
 ) -> *const u8 {
@@ -246,7 +252,13 @@ fn jit_fn(instance_ptr: *const Instance<'static>, trampoline_ptr: *const u8) -> 
 
             jit_module.prepare_for_function_redefine(func_id).unwrap();
 
-            let mut cx = crate::CodegenCx::new(tcx, backend_config, jit_module.isa(), false);
+            let mut cx = crate::CodegenCx::new(
+                tcx,
+                backend_config,
+                jit_module.isa(),
+                false,
+                Symbol::intern("dummy_cgu_name"),
+            );
             tcx.sess.time("codegen fn", || crate::base::codegen_fn(&mut cx, jit_module, instance));
 
             assert!(cx.global_asm.is_empty());
@@ -276,8 +288,8 @@ fn load_imported_symbols_for_jit(
         match data[cnum.as_usize() - 1] {
             Linkage::NotLinked | Linkage::IncludedFromDylib => {}
             Linkage::Static => {
-                let name = &crate_info.crate_name[&cnum];
-                let mut err = sess.struct_err(&format!("Can't load static lib {}", name.as_str()));
+                let name = crate_info.crate_name[&cnum];
+                let mut err = sess.struct_err(&format!("Can't load static lib {}", name));
                 err.note("rustc_codegen_cranelift can only load dylibs in JIT mode.");
                 err.emit();
             }
@@ -369,12 +381,5 @@ fn codegen_shim<'tcx>(cx: &mut CodegenCx<'tcx>, module: &mut JITModule, inst: In
     let ret_vals = trampoline_builder.func.dfg.inst_results(call_inst).to_vec();
     trampoline_builder.ins().return_(&ret_vals);
 
-    module
-        .define_function(
-            func_id,
-            &mut cx.cached_context,
-            &mut NullTrapSink {},
-            &mut NullStackMapSink {},
-        )
-        .unwrap();
+    module.define_function(func_id, &mut cx.cached_context).unwrap();
 }

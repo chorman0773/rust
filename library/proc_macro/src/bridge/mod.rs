@@ -62,6 +62,7 @@ macro_rules! with_api {
                 fn clone($self: &$S::TokenStream) -> $S::TokenStream;
                 fn new() -> $S::TokenStream;
                 fn is_empty($self: &$S::TokenStream) -> bool;
+                fn expand_expr($self: &$S::TokenStream) -> Result<$S::TokenStream, ()>;
                 fn from_str(src: &str) -> $S::TokenStream;
                 fn to_string($self: &$S::TokenStream) -> String;
                 fn from_token_tree(
@@ -230,10 +231,10 @@ pub struct Bridge<'a> {
 
     /// If 'true', always invoke the default panic hook
     force_show_panics: bool,
-}
 
-impl<'a> !Sync for Bridge<'a> {}
-impl<'a> !Send for Bridge<'a> {}
+    // Prevent Send and Sync impls
+    _marker: marker::PhantomData<*mut ()>,
+}
 
 #[forbid(unsafe_code)]
 #[allow(non_camel_case_types)]
@@ -294,13 +295,13 @@ impl<T, M> Unmark for Marked<T, M> {
         self.value
     }
 }
-impl<T, M> Unmark for &'a Marked<T, M> {
+impl<'a, T, M> Unmark for &'a Marked<T, M> {
     type Unmarked = &'a T;
     fn unmark(self) -> Self::Unmarked {
         &self.value
     }
 }
-impl<T, M> Unmark for &'a mut Marked<T, M> {
+impl<'a, T, M> Unmark for &'a mut Marked<T, M> {
     type Unmarked = &'a mut T;
     fn unmark(self) -> Self::Unmarked {
         &mut self.value
@@ -355,8 +356,8 @@ mark_noop! {
     (),
     bool,
     char,
-    &'a [u8],
-    &'a str,
+    &'_ [u8],
+    &'_ str,
     String,
     usize,
     Delimiter,

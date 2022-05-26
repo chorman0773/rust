@@ -1,3 +1,5 @@
+// compile-flags: -Zdeduplicate-diagnostics=yes
+
 use std::collections::HashMap;
 
 fn main() {

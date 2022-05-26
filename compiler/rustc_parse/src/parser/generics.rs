@@ -4,8 +4,8 @@ use rustc_ast::token;
 use rustc_ast::{
     self as ast, Attribute, GenericBounds, GenericParam, GenericParamKind, WhereClause,
 };
-use rustc_errors::PResult;
-use rustc_span::symbol::{kw, sym};
+use rustc_errors::{Applicability, PResult};
+use rustc_span::symbol::kw;
 
 impl<'a> Parser<'a> {
     /// Parses bounds of a lifetime parameter `BOUND + BOUND + BOUND`, possibly with trailing `+`.
@@ -30,8 +30,10 @@ impl<'a> Parser<'a> {
         let ident = self.parse_ident()?;
 
         // Parse optional colon and param bounds.
+        let mut colon_span = None;
         let bounds = if self.eat(&token::Colon) {
-            self.parse_generic_bounds(Some(self.prev_token.span))?
+            colon_span = Some(self.prev_token.span);
+            self.parse_generic_bounds(colon_span)?
         } else {
             Vec::new()
         };
@@ -45,10 +47,14 @@ impl<'a> Parser<'a> {
             bounds,
             kind: GenericParamKind::Type { default },
             is_placeholder: false,
+            colon_span,
         })
     }
 
-    fn parse_const_param(&mut self, preceding_attrs: Vec<Attribute>) -> PResult<'a, GenericParam> {
+    pub(crate) fn parse_const_param(
+        &mut self,
+        preceding_attrs: Vec<Attribute>,
+    ) -> PResult<'a, GenericParam> {
         let const_span = self.token.span;
 
         self.expect_keyword(kw::Const)?;
@@ -56,19 +62,8 @@ impl<'a> Parser<'a> {
         self.expect(&token::Colon)?;
         let ty = self.parse_ty()?;
 
-        // Parse optional const generics default value, taking care of feature gating the spans
-        // with the unstable syntax mechanism.
-        let default = if self.eat(&token::Eq) {
-            // The gated span goes from the `=` to the end of the const argument that follows (and
-            // which could be a block expression).
-            let start = self.prev_token.span;
-            let const_arg = self.parse_const_arg()?;
-            let span = start.to(const_arg.value.span);
-            self.sess.gated_spans.gate(sym::const_generics_defaults, span);
-            Some(const_arg)
-        } else {
-            None
-        };
+        // Parse optional const generics default value.
+        let default = if self.eat(&token::Eq) { Some(self.parse_const_arg()?) } else { None };
 
         Ok(GenericParam {
             ident,
@@ -77,6 +72,7 @@ impl<'a> Parser<'a> {
             bounds: Vec::new(),
             kind: GenericParamKind::Const { ty, kw_span: const_span, default },
             is_placeholder: false,
+            colon_span: None,
         })
     }
 
@@ -89,13 +85,26 @@ impl<'a> Parser<'a> {
             let attrs = self.parse_outer_attributes()?;
             let param =
                 self.collect_tokens_trailing_token(attrs, ForceCollect::No, |this, attrs| {
+                    if this.eat_keyword_noexpect(kw::SelfUpper) {
+                        // `Self` as a generic param is invalid. Here we emit the diagnostic and continue parsing
+                        // as if `Self` never existed.
+                        this.struct_span_err(
+                            this.prev_token.span,
+                            "unexpected keyword `Self` in generic parameters",
+                        )
+                        .note("you cannot use `Self` as a generic parameter because it is reserved for associated items")
+                        .emit();
+
+                        this.eat(&token::Comma);
+                    }
+
                     let param = if this.check_lifetime() {
                         let lifetime = this.expect_lifetime();
                         // Parse lifetime parameter.
-                        let bounds = if this.eat(&token::Colon) {
-                            this.parse_lt_param_bounds()
+                        let (colon_span, bounds) = if this.eat(&token::Colon) {
+                            (Some(this.prev_token.span), this.parse_lt_param_bounds())
                         } else {
-                            Vec::new()
+                            (None, Vec::new())
                         };
                         Some(ast::GenericParam {
                             ident: lifetime.ident,
@@ -104,6 +113,7 @@ impl<'a> Parser<'a> {
                             bounds,
                             kind: ast::GenericParamKind::Lifetime,
                             is_placeholder: false,
+                            colon_span,
                         })
                     } else if this.check_keyword(kw::Const) {
                         // Parse const parameter.
@@ -113,7 +123,7 @@ impl<'a> Parser<'a> {
                         Some(this.parse_ty_param(attrs)?)
                     } else if this.token.can_begin_type() {
                         // Trying to write an associated type bound? (#26271)
-                        let snapshot = this.clone();
+                        let snapshot = this.create_snapshot_for_diagnostic();
                         match this.parse_ty_where_predicate() {
                             Ok(where_predicate) => {
                                 this.struct_span_err(
@@ -125,10 +135,10 @@ impl<'a> Parser<'a> {
                                 // FIXME - try to continue parsing other generics?
                                 return Ok((None, TrailingToken::None));
                             }
-                            Err(mut err) => {
+                            Err(err) => {
                                 err.cancel();
                                 // FIXME - maybe we should overwrite 'self' outside of `collect_tokens`?
-                                *this = snapshot;
+                                this.restore_snapshot(snapshot);
                                 return Ok((None, TrailingToken::None));
                             }
                         }
@@ -251,7 +261,21 @@ impl<'a> Parser<'a> {
                 break;
             }
 
-            if !self.eat(&token::Comma) {
+            let prev_token = self.prev_token.span;
+            let ate_comma = self.eat(&token::Comma);
+
+            if self.eat_keyword_noexpect(kw::Where) {
+                let msg = "cannot define duplicate `where` clauses on an item";
+                let mut err = self.struct_span_err(self.token.span, msg);
+                err.span_label(lo, "previous `where` clause starts here");
+                err.span_suggestion_verbose(
+                    prev_token.shrink_to_hi().to(self.prev_token.span),
+                    "consider joining the two `where` clauses into one",
+                    ",".to_owned(),
+                    Applicability::MaybeIncorrect,
+                );
+                err.emit();
+            } else if !ate_comma {
                 break;
             }
         }
@@ -293,6 +317,7 @@ impl<'a> Parser<'a> {
                 id: ast::DUMMY_NODE_ID,
             }))
         } else {
+            self.maybe_recover_bounds_doubled_colon(&ty)?;
             self.unexpected()
         }
     }

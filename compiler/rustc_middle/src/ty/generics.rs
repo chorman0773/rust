@@ -1,9 +1,9 @@
 use crate::middle::resolve_lifetime::ObjectLifetimeDefault;
 use crate::ty;
 use crate::ty::subst::{Subst, SubstsRef};
+use crate::ty::EarlyBinder;
 use rustc_ast as ast;
 use rustc_data_structures::fx::FxHashMap;
-use rustc_hir as hir;
 use rustc_hir::def_id::DefId;
 use rustc_span::symbol::Symbol;
 use rustc_span::Span;
@@ -13,14 +13,8 @@ use super::{EarlyBoundRegion, InstantiatedPredicates, ParamConst, ParamTy, Predi
 #[derive(Clone, Debug, TyEncodable, TyDecodable, HashStable)]
 pub enum GenericParamDefKind {
     Lifetime,
-    Type {
-        has_default: bool,
-        object_lifetime_default: ObjectLifetimeDefault,
-        synthetic: Option<hir::SyntheticTyParamKind>,
-    },
-    Const {
-        has_default: bool,
-    },
+    Type { has_default: bool, object_lifetime_default: ObjectLifetimeDefault, synthetic: bool },
+    Const { has_default: bool },
 }
 
 impl GenericParamDefKind {
@@ -31,13 +25,18 @@ impl GenericParamDefKind {
             GenericParamDefKind::Const { .. } => "constant",
         }
     }
-    pub fn to_ord(&self, tcx: TyCtxt<'_>) -> ast::ParamKindOrd {
+    pub fn to_ord(&self) -> ast::ParamKindOrd {
         match self {
             GenericParamDefKind::Lifetime => ast::ParamKindOrd::Lifetime,
             GenericParamDefKind::Type { .. } => ast::ParamKindOrd::Type,
-            GenericParamDefKind::Const { .. } => {
-                ast::ParamKindOrd::Const { unordered: tcx.features().unordered_const_ty_params() }
-            }
+            GenericParamDefKind::Const { .. } => ast::ParamKindOrd::Const,
+        }
+    }
+
+    pub fn is_ty_or_const(&self) -> bool {
+        match self {
+            GenericParamDefKind::Lifetime => false,
+            GenericParamDefKind::Type { .. } | GenericParamDefKind::Const { .. } => true,
         }
     }
 }
@@ -202,15 +201,7 @@ impl<'tcx> Generics {
     /// Returns `true` if `params` has `impl Trait`.
     pub fn has_impl_trait(&'tcx self) -> bool {
         self.params.iter().any(|param| {
-            matches!(
-                param.kind,
-                ty::GenericParamDefKind::Type {
-                    synthetic: Some(
-                        hir::SyntheticTyParamKind::ImplTrait | hir::SyntheticTyParamKind::FromAttr,
-                    ),
-                    ..
-                }
-            )
+            matches!(param.kind, ty::GenericParamDefKind::Type { synthetic: true, .. })
         })
     }
 }
@@ -239,7 +230,11 @@ impl<'tcx> GenericPredicates<'tcx> {
         substs: SubstsRef<'tcx>,
     ) -> InstantiatedPredicates<'tcx> {
         InstantiatedPredicates {
-            predicates: self.predicates.iter().map(|(p, _)| p.subst(tcx, substs)).collect(),
+            predicates: self
+                .predicates
+                .iter()
+                .map(|(p, _)| EarlyBinder(*p).subst(tcx, substs))
+                .collect(),
             spans: self.predicates.iter().map(|(_, sp)| *sp).collect(),
         }
     }
@@ -253,7 +248,9 @@ impl<'tcx> GenericPredicates<'tcx> {
         if let Some(def_id) = self.parent {
             tcx.predicates_of(def_id).instantiate_into(tcx, instantiated, substs);
         }
-        instantiated.predicates.extend(self.predicates.iter().map(|(p, _)| p.subst(tcx, substs)));
+        instantiated
+            .predicates
+            .extend(self.predicates.iter().map(|(p, _)| EarlyBinder(*p).subst(tcx, substs)));
         instantiated.spans.extend(self.predicates.iter().map(|(_, sp)| *sp));
     }
 

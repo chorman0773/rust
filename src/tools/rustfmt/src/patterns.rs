@@ -318,10 +318,12 @@ fn rewrite_struct_pat(
     let mut fields_str = write_list(&item_vec, &fmt)?;
     let one_line_width = h_shape.map_or(0, |shape| shape.width);
 
+    let has_trailing_comma = fmt.needs_trailing_separator();
+
     if ellipsis {
         if fields_str.contains('\n') || fields_str.len() > one_line_width {
             // Add a missing trailing comma.
-            if context.config.trailing_comma() == SeparatorTactic::Never {
+            if !has_trailing_comma {
                 fields_str.push(',');
             }
             fields_str.push('\n');
@@ -329,8 +331,7 @@ fn rewrite_struct_pat(
         } else {
             if !fields_str.is_empty() {
                 // there are preceding struct fields being matched on
-                if tactic == DefinitiveListTactic::Vertical {
-                    // if the tactic is Vertical, write_list already added a trailing ,
+                if has_trailing_comma {
                     fields_str.push(' ');
                 } else {
                     fields_str.push_str(", ");
@@ -456,11 +457,11 @@ fn rewrite_tuple_pat(
     context: &RewriteContext<'_>,
     shape: Shape,
 ) -> Option<String> {
-    let mut pat_vec: Vec<_> = pats.iter().map(|x| TuplePatField::Pat(x)).collect();
-
-    if pat_vec.is_empty() {
+    if pats.is_empty() {
         return Some(format!("{}()", path_str.unwrap_or_default()));
     }
+    let mut pat_vec: Vec<_> = pats.iter().map(TuplePatField::Pat).collect();
+
     let wildcard_suffix_len = count_wildcard_suffix_len(context, &pat_vec, span, shape);
     let (pat_vec, span) = if context.config.condense_wildcard_suffixes() && wildcard_suffix_len >= 2
     {
@@ -482,7 +483,7 @@ fn rewrite_tuple_pat(
     let path_str = path_str.unwrap_or_default();
 
     overflow::rewrite_with_parens(
-        &context,
+        context,
         &path_str,
         pat_vec.iter(),
         shape,

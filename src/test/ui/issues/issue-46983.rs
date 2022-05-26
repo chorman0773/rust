@@ -1,6 +1,11 @@
+// revisions: base nll
+// ignore-compare-mode-nll
+//[nll] compile-flags: -Z borrowck=mir
+
 fn foo(x: &u32) -> &'static u32 {
     &*x
-    //~^ ERROR explicit lifetime required in the type of `x` [E0621]
+    //[base]~^ ERROR `x` has an anonymous lifetime `'_` but it needs to satisfy a `'static` lifetime requirement [E0759]
+    //[nll]~^^ ERROR lifetime may not live long enough
 }
 
 fn main() {}

@@ -6,7 +6,9 @@ use rustc_infer::infer::{InferCtxt, TyCtxtInferExt};
 use rustc_infer::traits::TraitEngineExt as _;
 use rustc_middle::ty::query::Providers;
 use rustc_middle::ty::subst::{GenericArg, Subst, UserSelfTy, UserSubsts};
-use rustc_middle::ty::{self, FnSig, Lift, PolyFnSig, Ty, TyCtxt, TypeFoldable, Variance};
+use rustc_middle::ty::{
+    self, EarlyBinder, FnSig, Lift, PolyFnSig, Ty, TyCtxt, TypeFoldable, Variance,
+};
 use rustc_middle::ty::{ParamEnv, ParamEnvAnd, Predicate, ToPredicate};
 use rustc_span::{Span, DUMMY_SP};
 use rustc_trait_selection::infer::InferCtxtBuilderExt;
@@ -21,7 +23,7 @@ use rustc_trait_selection::traits::query::{Fallible, NoSolution};
 use rustc_trait_selection::traits::{Normalized, Obligation, ObligationCause, TraitEngine};
 use std::fmt;
 
-crate fn provide(p: &mut Providers) {
+pub(crate) fn provide(p: &mut Providers) {
     *p = Providers {
         type_op_ascribe_user_type,
         type_op_eq,
@@ -70,7 +72,7 @@ struct AscribeUserTypeCx<'me, 'tcx> {
     fulfill_cx: &'me mut dyn TraitEngine<'tcx>,
 }
 
-impl AscribeUserTypeCx<'me, 'tcx> {
+impl<'me, 'tcx> AscribeUserTypeCx<'me, 'tcx> {
     fn normalize<T>(&mut self, value: T) -> T
     where
         T: TypeFoldable<'tcx>,
@@ -115,7 +117,7 @@ impl AscribeUserTypeCx<'me, 'tcx> {
     where
         T: TypeFoldable<'tcx>,
     {
-        value.subst(self.tcx(), substs)
+        EarlyBinder(value).subst(self.tcx(), substs)
     }
 
     fn relate_mir_and_user_ty(
@@ -195,7 +197,7 @@ fn type_op_eq<'tcx>(
     })
 }
 
-fn type_op_normalize<T>(
+fn type_op_normalize<'tcx, T>(
     infcx: &InferCtxt<'_, 'tcx>,
     fulfill_cx: &mut dyn TraitEngine<'tcx>,
     key: ParamEnvAnd<'tcx, Normalize<T>>,
@@ -210,28 +212,28 @@ where
     Ok(value)
 }
 
-fn type_op_normalize_ty(
+fn type_op_normalize_ty<'tcx>(
     tcx: TyCtxt<'tcx>,
     canonicalized: Canonical<'tcx, ParamEnvAnd<'tcx, Normalize<Ty<'tcx>>>>,
 ) -> Result<&'tcx Canonical<'tcx, QueryResponse<'tcx, Ty<'tcx>>>, NoSolution> {
     tcx.infer_ctxt().enter_canonical_trait_query(&canonicalized, type_op_normalize)
 }
 
-fn type_op_normalize_predicate(
+fn type_op_normalize_predicate<'tcx>(
     tcx: TyCtxt<'tcx>,
     canonicalized: Canonical<'tcx, ParamEnvAnd<'tcx, Normalize<Predicate<'tcx>>>>,
 ) -> Result<&'tcx Canonical<'tcx, QueryResponse<'tcx, Predicate<'tcx>>>, NoSolution> {
     tcx.infer_ctxt().enter_canonical_trait_query(&canonicalized, type_op_normalize)
 }
 
-fn type_op_normalize_fn_sig(
+fn type_op_normalize_fn_sig<'tcx>(
     tcx: TyCtxt<'tcx>,
     canonicalized: Canonical<'tcx, ParamEnvAnd<'tcx, Normalize<FnSig<'tcx>>>>,
 ) -> Result<&'tcx Canonical<'tcx, QueryResponse<'tcx, FnSig<'tcx>>>, NoSolution> {
     tcx.infer_ctxt().enter_canonical_trait_query(&canonicalized, type_op_normalize)
 }
 
-fn type_op_normalize_poly_fn_sig(
+fn type_op_normalize_poly_fn_sig<'tcx>(
     tcx: TyCtxt<'tcx>,
     canonicalized: Canonical<'tcx, ParamEnvAnd<'tcx, Normalize<PolyFnSig<'tcx>>>>,
 ) -> Result<&'tcx Canonical<'tcx, QueryResponse<'tcx, PolyFnSig<'tcx>>>, NoSolution> {

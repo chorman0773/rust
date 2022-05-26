@@ -2,10 +2,43 @@
 
 set -e
 
-source scripts/config.sh
-source scripts/ext_config.sh
-export RUSTC=false # ensure that cg_llvm isn't accidentally used
-MY_RUSTC="$(pwd)/build/bin/cg_clif $RUSTFLAGS -L crate=target/out --out-dir target/out -Cdebuginfo=2"
+export CG_CLIF_DISPLAY_CG_TIME=1
+export CG_CLIF_DISABLE_INCR_CACHE=1
+
+export HOST_TRIPLE=$(rustc -vV | grep host | cut -d: -f2 | tr -d " ")
+export TARGET_TRIPLE=${TARGET_TRIPLE:-$HOST_TRIPLE}
+
+export RUN_WRAPPER=''
+
+case "$TARGET_TRIPLE" in
+   x86_64*)
+      export JIT_SUPPORTED=1
+      ;;
+   *)
+      export JIT_SUPPORTED=0
+      ;;
+esac
+
+if [[ "$HOST_TRIPLE" != "$TARGET_TRIPLE" ]]; then
+   export JIT_SUPPORTED=0
+   if [[ "$TARGET_TRIPLE" == "aarch64-unknown-linux-gnu" ]]; then
+      # We are cross-compiling for aarch64. Use the correct linker and run tests in qemu.
+      export RUSTFLAGS='-Clinker=aarch64-linux-gnu-gcc '$RUSTFLAGS
+      export RUN_WRAPPER='qemu-aarch64 -L /usr/aarch64-linux-gnu'
+   elif [[ "$TARGET_TRIPLE" == "x86_64-pc-windows-gnu" ]]; then
+      # We are cross-compiling for Windows. Run tests in wine.
+      export RUN_WRAPPER='wine'
+   else
+      echo "Unknown non-native platform"
+   fi
+fi
+
+# FIXME fix `#[linkage = "extern_weak"]` without this
+if [[ "$(uname)" == 'Darwin' ]]; then
+   export RUSTFLAGS="$RUSTFLAGS -Clink-arg=-undefined -Clink-arg=dynamic_lookup"
+fi
+
+MY_RUSTC="$(pwd)/build/rustc-clif $RUSTFLAGS -L crate=target/out --out-dir target/out -Cdebuginfo=2"
 
 function no_sysroot_tests() {
     echo "[BUILD] mini_core"
@@ -35,7 +68,11 @@ function base_sysroot_tests() {
     $MY_RUSTC example/arbitrary_self_types_pointers_and_wrappers.rs --crate-name arbitrary_self_types_pointers_and_wrappers --crate-type bin --target "$TARGET_TRIPLE"
     $RUN_WRAPPER ./target/out/arbitrary_self_types_pointers_and_wrappers
 
-    echo "[AOT] alloc_system"
+    echo "[AOT] issue_91827_extern_types"
+    $MY_RUSTC example/issue-91827-extern-types.rs --crate-name issue_91827_extern_types --crate-type bin --target "$TARGET_TRIPLE"
+    $RUN_WRAPPER ./target/out/issue_91827_extern_types
+
+    echo "[BUILD] alloc_system"
     $MY_RUSTC example/alloc_system.rs --crate-type lib --target "$TARGET_TRIPLE"
 
     echo "[AOT] alloc_example"
@@ -52,14 +89,13 @@ function base_sysroot_tests() {
         echo "[JIT] std_example (skipped)"
     fi
 
-    echo "[AOT] dst_field_align"
-    # FIXME Re-add -Zmir-opt-level=2 once rust-lang/rust#67529 is fixed.
-    $MY_RUSTC example/dst-field-align.rs --crate-name dst_field_align --crate-type bin --target "$TARGET_TRIPLE"
-    $RUN_WRAPPER ./target/out/dst_field_align || (echo $?; false)
-
     echo "[AOT] std_example"
     $MY_RUSTC example/std_example.rs --crate-type bin --target "$TARGET_TRIPLE"
     $RUN_WRAPPER ./target/out/std_example arg
+
+    echo "[AOT] dst_field_align"
+    $MY_RUSTC example/dst-field-align.rs --crate-name dst_field_align --crate-type bin --target "$TARGET_TRIPLE"
+    $RUN_WRAPPER ./target/out/dst_field_align
 
     echo "[AOT] subslice-patterns-const-eval"
     $MY_RUSTC example/subslice-patterns-const-eval.rs --crate-type bin -Cpanic=abort --target "$TARGET_TRIPLE"
@@ -69,6 +105,10 @@ function base_sysroot_tests() {
     $MY_RUSTC example/track-caller-attribute.rs --crate-type bin -Cpanic=abort --target "$TARGET_TRIPLE"
     $RUN_WRAPPER ./target/out/track-caller-attribute
 
+    echo "[AOT] float-minmax-pass"
+    $MY_RUSTC example/float-minmax-pass.rs --crate-type bin -Cpanic=abort --target "$TARGET_TRIPLE"
+    $RUN_WRAPPER ./target/out/float-minmax-pass
+
     echo "[AOT] mod_bench"
     $MY_RUSTC example/mod_bench.rs --crate-type bin --target "$TARGET_TRIPLE"
     $RUN_WRAPPER ./target/out/mod_bench
@@ -76,73 +116,73 @@ function base_sysroot_tests() {
 
 function extended_sysroot_tests() {
     pushd rand
-    ../build/cargo clean
+    ../build/cargo-clif clean
     if [[ "$HOST_TRIPLE" = "$TARGET_TRIPLE" ]]; then
         echo "[TEST] rust-random/rand"
-        ../build/cargo test --workspace
+        ../build/cargo-clif test --workspace
     else
         echo "[AOT] rust-random/rand"
-        ../build/cargo build --workspace --target $TARGET_TRIPLE --tests
+        ../build/cargo-clif build --workspace --target $TARGET_TRIPLE --tests
     fi
     popd
 
     pushd simple-raytracer
     if [[ "$HOST_TRIPLE" = "$TARGET_TRIPLE" ]]; then
         echo "[BENCH COMPILE] ebobby/simple-raytracer"
-        hyperfine --runs "${RUN_RUNS:-10}" --warmup 1 --prepare "../build/cargo clean" \
-        "RUSTC=rustc RUSTFLAGS='' cargo build" \
-        "../build/cargo build"
+        hyperfine --runs "${RUN_RUNS:-10}" --warmup 1 --prepare "../build/cargo-clif clean" \
+        "RUSTFLAGS='' cargo build" \
+        "../build/cargo-clif build"
 
         echo "[BENCH RUN] ebobby/simple-raytracer"
         cp ./target/debug/main ./raytracer_cg_clif
         hyperfine --runs "${RUN_RUNS:-10}" ./raytracer_cg_llvm ./raytracer_cg_clif
     else
-        ../build/cargo clean
+        ../build/cargo-clif clean
         echo "[BENCH COMPILE] ebobby/simple-raytracer (skipped)"
         echo "[COMPILE] ebobby/simple-raytracer"
-        ../build/cargo build --target $TARGET_TRIPLE
+        ../build/cargo-clif build --target $TARGET_TRIPLE
         echo "[BENCH RUN] ebobby/simple-raytracer (skipped)"
     fi
     popd
 
     pushd build_sysroot/sysroot_src/library/core/tests
     echo "[TEST] libcore"
-    ../../../../../build/cargo clean
+    ../../../../../build/cargo-clif clean
     if [[ "$HOST_TRIPLE" = "$TARGET_TRIPLE" ]]; then
-        ../../../../../build/cargo test
+        ../../../../../build/cargo-clif test
     else
-        ../../../../../build/cargo build --target $TARGET_TRIPLE --tests
+        ../../../../../build/cargo-clif build --target $TARGET_TRIPLE --tests
     fi
     popd
 
     pushd regex
     echo "[TEST] rust-lang/regex example shootout-regex-dna"
-    ../build/cargo clean
+    ../build/cargo-clif clean
     export RUSTFLAGS="$RUSTFLAGS --cap-lints warn" # newer aho_corasick versions throw a deprecation warning
     # Make sure `[codegen mono items] start` doesn't poison the diff
-    ../build/cargo build --example shootout-regex-dna --target $TARGET_TRIPLE
+    ../build/cargo-clif build --example shootout-regex-dna --target $TARGET_TRIPLE
     if [[ "$HOST_TRIPLE" = "$TARGET_TRIPLE" ]]; then
         cat examples/regexdna-input.txt \
-            | ../build/cargo run --example shootout-regex-dna --target $TARGET_TRIPLE \
+            | ../build/cargo-clif run --example shootout-regex-dna --target $TARGET_TRIPLE \
             | grep -v "Spawned thread" > res.txt
         diff -u res.txt examples/regexdna-output.txt
     fi
 
     if [[ "$HOST_TRIPLE" = "$TARGET_TRIPLE" ]]; then
         echo "[TEST] rust-lang/regex tests"
-        ../build/cargo test --tests -- --exclude-should-panic --test-threads 1 -Zunstable-options -q
+        ../build/cargo-clif test --tests -- --exclude-should-panic --test-threads 1 -Zunstable-options -q
     else
         echo "[AOT] rust-lang/regex tests"
-        ../build/cargo build --tests --target $TARGET_TRIPLE
+        ../build/cargo-clif build --tests --target $TARGET_TRIPLE
     fi
     popd
 
     pushd portable-simd
     echo "[TEST] rust-lang/portable-simd"
-    ../build/cargo clean
-    ../build/cargo build --all-targets --target $TARGET_TRIPLE
+    ../build/cargo-clif clean
+    ../build/cargo-clif build --all-targets --target $TARGET_TRIPLE
     if [[ "$HOST_TRIPLE" = "$TARGET_TRIPLE" ]]; then
-        ../build/cargo test -q
+        ../build/cargo-clif test -q
     fi
     popd
 }

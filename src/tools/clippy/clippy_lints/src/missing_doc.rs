@@ -10,7 +10,7 @@ use clippy_utils::diagnostics::span_lint;
 use rustc_ast::ast;
 use rustc_hir as hir;
 use rustc_lint::{LateContext, LateLintPass, LintContext};
-use rustc_middle::ty;
+use rustc_middle::ty::{self, DefIdTree};
 use rustc_session::{declare_tool_lint, impl_lint_pass};
 use rustc_span::def_id::CRATE_DEF_ID;
 use rustc_span::source_map::Span;
@@ -26,6 +26,7 @@ declare_clippy_lint! {
     /// allowed-by-default lint for
     /// public members, but has no way to enforce documentation of private items.
     /// This lint fixes that.
+    #[clippy::version = "pre 1.29.0"]
     pub MISSING_DOCS_IN_PRIVATE_ITEMS,
     restriction,
     "detects missing documentation for public and private members"
@@ -113,8 +114,8 @@ impl<'tcx> LateLintPass<'tcx> for MissingDoc {
             hir::ItemKind::Fn(..) => {
                 // ignore main()
                 if it.ident.name == sym::main {
-                    let def_key = cx.tcx.hir().def_key(it.def_id);
-                    if def_key.parent == Some(hir::def_id::CRATE_DEF_INDEX) {
+                    let at_root = cx.tcx.local_parent(it.def_id) == CRATE_DEF_ID;
+                    if at_root {
                         return;
                     }
                 }

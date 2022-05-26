@@ -55,32 +55,36 @@ LL |         asm!("{}", inout(reg) r);
    |
    = note: only integers, floats, SIMD vectors, pointers and function pointers can be used as arguments for inline assembly
 
-error: asm `sym` operand must point to a fn or static
-  --> $DIR/type-check-2.rs:39:24
+error: invalid `sym` operand
+  --> $DIR/type-check-2.rs:41:20
    |
 LL |         asm!("{}", sym C);
-   |                        ^
-
-error: asm `sym` operand must point to a fn or static
-  --> $DIR/type-check-2.rs:41:24
+   |                    ^^^^^ is an `i32`
    |
-LL |         asm!("{}", sym x);
-   |                        ^
+   = help: `sym` operands must refer to either a function or a static
+
+error: invalid `sym` operand
+  --> $DIR/type-check-2.rs:92:19
+   |
+LL | global_asm!("{}", sym C);
+   |                   ^^^^^ is an `i32`
+   |
+   = help: `sym` operands must refer to either a function or a static
 
 error[E0381]: use of possibly-uninitialized variable: `x`
-  --> $DIR/type-check-2.rs:17:28
+  --> $DIR/type-check-2.rs:19:28
    |
 LL |         asm!("{}", in(reg) x);
    |                            ^ use of possibly-uninitialized `x`
 
 error[E0381]: use of possibly-uninitialized variable: `y`
-  --> $DIR/type-check-2.rs:20:9
+  --> $DIR/type-check-2.rs:22:9
    |
 LL |         asm!("{}", inout(reg) y);
    |         ^^^^^^^^^^^^^^^^^^^^^^^^ use of possibly-uninitialized `y`
 
 error[E0596]: cannot borrow `v` as mutable, as it is not declared as mutable
-  --> $DIR/type-check-2.rs:28:29
+  --> $DIR/type-check-2.rs:30:29
    |
 LL |         let v: Vec<u64> = vec![0, 1, 2];
    |             - help: consider changing this to be mutable: `mut v`
@@ -89,7 +93,7 @@ LL |         asm!("{}", out(reg) v[0]);
    |                             ^ cannot borrow as mutable
 
 error[E0596]: cannot borrow `v` as mutable, as it is not declared as mutable
-  --> $DIR/type-check-2.rs:30:31
+  --> $DIR/type-check-2.rs:32:31
    |
 LL |         let v: Vec<u64> = vec![0, 1, 2];
    |             - help: consider changing this to be mutable: `mut v`

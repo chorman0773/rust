@@ -8,10 +8,11 @@ use rustc_session::config::{build_configuration, build_session_options, to_crate
 use rustc_session::config::{
     rustc_optgroups, ErrorOutputType, ExternLocation, LocationDetail, Options, Passes,
 };
-use rustc_session::config::{CFGuard, ExternEntry, LinkerPluginLto, LtoCli, SwitchWithOptPath};
 use rustc_session::config::{
-    Externs, OutputType, OutputTypes, SymbolManglingVersion, WasiExecModel,
+    BranchProtection, Externs, OomStrategy, OutputType, OutputTypes, PAuthKey, PacRet,
+    SymbolManglingVersion, WasiExecModel,
 };
+use rustc_session::config::{CFGuard, ExternEntry, LinkerPluginLto, LtoCli, SwitchWithOptPath};
 use rustc_session::lint::Level;
 use rustc_session::search_paths::SearchPath;
 use rustc_session::utils::{CanonicalizedPath, NativeLib, NativeLibKind};
@@ -20,7 +21,9 @@ use rustc_span::edition::{Edition, DEFAULT_EDITION};
 use rustc_span::symbol::sym;
 use rustc_span::SourceFileHashAlgorithm;
 use rustc_target::spec::{CodeModel, LinkerFlavor, MergeFunctions, PanicStrategy};
-use rustc_target::spec::{RelocModel, RelroLevel, SanitizerSet, SplitDebuginfo, TlsModel};
+use rustc_target::spec::{
+    RelocModel, RelroLevel, SanitizerSet, SplitDebuginfo, StackProtector, TlsModel,
+};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::iter::FromIterator;
@@ -40,6 +43,7 @@ fn mk_session(matches: getopts::Matches) -> (Session, CfgSpecs) {
     let (sessopts, cfg) = build_session_options_and_crate_config(matches);
     let sess = build_session(
         sessopts,
+        None,
         None,
         registry,
         DiagnosticOutput::Default,
@@ -62,6 +66,7 @@ where
         location: ExternLocation::ExactPaths(locations),
         is_private_dep: false,
         add_prelude: true,
+        nounused_dep: false,
     }
 }
 
@@ -551,6 +556,7 @@ fn test_codegen_options_tracking_hash() {
     untracked!(remark, Passes::Some(vec![String::from("pass1"), String::from("pass2")]));
     untracked!(rpath, true);
     untracked!(save_temps, true);
+    untracked!(strip, Strip::Debuginfo);
 
     macro_rules! tracked {
         ($name: ident, $non_default_value: expr) => {
@@ -571,6 +577,7 @@ fn test_codegen_options_tracking_hash() {
     tracked!(force_frame_pointers, Some(false));
     tracked!(force_unwind_tables, Some(true));
     tracked!(inline_threshold, Some(0xf007ba11));
+    tracked!(instrument_coverage, Some(InstrumentCoverage::All));
     tracked!(linker_plugin_lto, LinkerPluginLto::LinkerPluginAuto);
     tracked!(link_dead_code, Some(true));
     tracked!(llvm_args, vec![String::from("1"), String::from("2")]);
@@ -590,6 +597,7 @@ fn test_codegen_options_tracking_hash() {
     tracked!(relocation_model, Some(RelocModel::Pic));
     tracked!(soft_float, true);
     tracked!(split_debuginfo, Some(SplitDebuginfo::Packed));
+    tracked!(symbol_mangling_version, Some(SymbolManglingVersion::V0));
     tracked!(target_cpu, Some(String::from("abc")));
     tracked!(target_feature, String::from("all the features, all of them"));
 }
@@ -635,11 +643,13 @@ fn test_debugging_options_tracking_hash() {
 
     // Make sure that changing an [UNTRACKED] option leaves the hash unchanged.
     // This list is in alphabetical order.
+    untracked!(assert_incr_state, Some(String::from("loaded")));
     untracked!(ast_json, true);
     untracked!(ast_json_noexpand, true);
     untracked!(borrowck, String::from("other"));
     untracked!(deduplicate_diagnostics, false);
     untracked!(dep_tasks, true);
+    untracked!(dlltool, Some(PathBuf::from("custom_dlltool.exe")));
     untracked!(dont_buffer_diagnostics, true);
     untracked!(dump_dep_graph, true);
     untracked!(dump_mir, Some(String::from("abc")));
@@ -647,7 +657,6 @@ fn test_debugging_options_tracking_hash() {
     untracked!(dump_mir_dir, String::from("abc"));
     untracked!(dump_mir_exclude_pass_number, true);
     untracked!(dump_mir_graphviz, true);
-    untracked!(emit_future_incompat_report, true);
     untracked!(emit_stack_sizes, true);
     untracked!(future_incompat_test, true);
     untracked!(hir_stats, true);
@@ -672,19 +681,17 @@ fn test_debugging_options_tracking_hash() {
     // `pre_link_arg` is omitted because it just forwards to `pre_link_args`.
     untracked!(pre_link_args, vec![String::from("abc"), String::from("def")]);
     untracked!(profile_closures, true);
-    untracked!(print_link_args, true);
     untracked!(print_llvm_passes, true);
     untracked!(print_mono_items, Some(String::from("abc")));
     untracked!(print_type_sizes, true);
     untracked!(proc_macro_backtrace, true);
     untracked!(query_dep_graph, true);
-    untracked!(query_stats, true);
     untracked!(save_analysis, true);
     untracked!(self_profile, SwitchWithOptPath::Enabled(None));
     untracked!(self_profile_events, Some(vec![String::new()]));
     untracked!(span_debug, true);
     untracked!(span_free_formats, true);
-    untracked!(strip, Strip::Debuginfo);
+    untracked!(temps_dir, Some(String::from("abc")));
     untracked!(terminal_width, Some(80));
     untracked!(threads, 99);
     untracked!(time, true);
@@ -711,26 +718,33 @@ fn test_debugging_options_tracking_hash() {
     // This list is in alphabetical order.
     tracked!(allow_features, Some(vec![String::from("lang_items")]));
     tracked!(always_encode_mir, true);
-    tracked!(assume_incomplete_release, true);
     tracked!(asm_comments, true);
+    tracked!(assume_incomplete_release, true);
     tracked!(binary_dep_depinfo, true);
+    tracked!(
+        branch_protection,
+        Some(BranchProtection {
+            bti: true,
+            pac_ret: Some(PacRet { leaf: true, key: PAuthKey::B })
+        })
+    );
     tracked!(chalk, true);
     tracked!(codegen_backend, Some("abc".to_string()));
     tracked!(crate_attr, vec!["abc".to_string()]);
     tracked!(debug_info_for_profiling, true);
     tracked!(debug_macros, true);
     tracked!(dep_info_omit_d_target, true);
+    tracked!(drop_tracking, true);
     tracked!(dual_proc_macros, true);
     tracked!(fewer_names, Some(true));
-    tracked!(force_overflow_checks, Some(true));
     tracked!(force_unstable_if_unmarked, true);
     tracked!(fuel, Some(("abc".to_string(), 99)));
     tracked!(function_sections, Some(false));
     tracked!(human_readable_cgu_names, true);
     tracked!(inline_in_all_cgus, Some(true));
     tracked!(inline_mir, Some(true));
-    tracked!(inline_mir_threshold, Some(123));
     tracked!(inline_mir_hint_threshold, Some(123));
+    tracked!(inline_mir_threshold, Some(123));
     tracked!(instrument_coverage, Some(InstrumentCoverage::All));
     tracked!(instrument_mcount, true);
     tracked!(link_only, true);
@@ -738,6 +752,7 @@ fn test_debugging_options_tracking_hash() {
     tracked!(location_detail, LocationDetail { file: true, line: false, column: false });
     tracked!(merge_functions, Some(MergeFunctions::Disabled));
     tracked!(mir_emit_retag, true);
+    tracked!(mir_enable_passes, vec![("DestProp".to_string(), false)]);
     tracked!(mir_opt_level, Some(4));
     tracked!(move_size_limit, Some(4096));
     tracked!(mutable_noalias, Some(true));
@@ -746,10 +761,11 @@ fn test_debugging_options_tracking_hash() {
     tracked!(no_link, true);
     tracked!(no_unique_section_names, true);
     tracked!(no_profiler_runtime, true);
+    tracked!(oom, OomStrategy::Panic);
     tracked!(osx_rpath_install_name, true);
     tracked!(panic_abort_tests, true);
     tracked!(panic_in_drop, PanicStrategy::Abort);
-    tracked!(partially_uninit_const_threshold, Some(123));
+    tracked!(pick_stable_methods_before_any_unstable, false);
     tracked!(plt, Some(true));
     tracked!(polonius, true);
     tracked!(precise_enum_drop_elaboration, false);
@@ -761,7 +777,6 @@ fn test_debugging_options_tracking_hash() {
     tracked!(relax_elf_relocations, Some(true));
     tracked!(relro_level, Some(RelroLevel::Full));
     tracked!(remap_cwd_prefix, Some(PathBuf::from("abc")));
-    tracked!(simulate_remapped_rust_src_base, Some(PathBuf::from("/rustc/abc")));
     tracked!(report_delayed_bugs, true);
     tracked!(sanitizer, SanitizerSet::ADDRESS);
     tracked!(sanitizer_memory_track_origins, 2);
@@ -769,15 +784,18 @@ fn test_debugging_options_tracking_hash() {
     tracked!(saturating_float_casts, Some(true));
     tracked!(share_generics, Some(true));
     tracked!(show_span, Some(String::from("abc")));
+    tracked!(simulate_remapped_rust_src_base, Some(PathBuf::from("/rustc/abc")));
     tracked!(src_hash_algorithm, Some(SourceFileHashAlgorithm::Sha1));
+    tracked!(stack_protector, StackProtector::All);
     tracked!(symbol_mangling_version, Some(SymbolManglingVersion::V0));
     tracked!(teach, true);
     tracked!(thinlto, Some(true));
     tracked!(thir_unsafeck, true);
-    tracked!(tune_cpu, Some(String::from("abc")));
     tracked!(tls_model, Some(TlsModel::GeneralDynamic));
     tracked!(trap_unreachable, Some(false));
     tracked!(treat_err_as_bug, NonZeroUsize::new(1));
+    tracked!(tune_cpu, Some(String::from("abc")));
+    tracked!(uninit_const_chunk_threshold, 123);
     tracked!(unleash_the_miri_inside_of_you, true);
     tracked!(use_ctors_section, Some(true));
     tracked!(verify_llvm_ir, true);

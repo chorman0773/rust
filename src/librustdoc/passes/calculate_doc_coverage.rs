@@ -1,3 +1,4 @@
+//! Calculates information used for the --show-coverage flag.
 use crate::clean;
 use crate::core::DocContext;
 use crate::html::markdown::{find_testable_code, ErrorCodes};
@@ -15,7 +16,7 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use std::ops;
 
-crate const CALCULATE_DOC_COVERAGE: Pass = Pass {
+pub(crate) const CALCULATE_DOC_COVERAGE: Pass = Pass {
     name: "calculate-doc-coverage",
     run: calculate_doc_coverage,
     description: "counts the number of items with and without documentation",
@@ -184,7 +185,7 @@ impl<'a, 'b> CoverageCalculator<'a, 'b> {
 
 impl<'a, 'b> DocVisitor for CoverageCalculator<'a, 'b> {
     fn visit_item(&mut self, i: &clean::Item) {
-        if !i.def_id.is_local() {
+        if !i.item_id.is_local() {
             // non-local items are skipped because they can be out of the users control,
             // especially in the case of trait impls, which rustdoc eagerly inlines
             return;
@@ -222,7 +223,7 @@ impl<'a, 'b> DocVisitor for CoverageCalculator<'a, 'b> {
                     .ctx
                     .tcx
                     .hir()
-                    .local_def_id_to_hir_id(i.def_id.expect_def_id().expect_local());
+                    .local_def_id_to_hir_id(i.item_id.expect_def_id().expect_local());
                 let (level, source) = self.ctx.tcx.lint_level_at_node(MISSING_DOCS, hir_id);
 
                 // In case we have:
@@ -236,9 +237,9 @@ impl<'a, 'b> DocVisitor for CoverageCalculator<'a, 'b> {
                 // there is no need to require documentation on the fields of tuple variants and
                 // tuple structs.
                 let should_be_ignored = i
-                    .def_id
+                    .item_id
                     .as_def_id()
-                    .and_then(|def_id| self.ctx.tcx.parent(def_id))
+                    .and_then(|def_id| self.ctx.tcx.opt_parent(def_id))
                     .and_then(|def_id| self.ctx.tcx.hir().get_if_local(def_id))
                     .map(|node| {
                         matches!(
@@ -264,7 +265,7 @@ impl<'a, 'b> DocVisitor for CoverageCalculator<'a, 'b> {
                 self.items.entry(filename).or_default().count_item(
                     has_docs,
                     has_doc_example,
-                    should_have_doc_example(self.ctx, &i),
+                    should_have_doc_example(self.ctx, i),
                     should_have_docs,
                 );
             }

@@ -67,9 +67,9 @@ and resolved paths.
 
 [`T-AST`] issues will generally need you to match against a predefined syntax structure.
 To figure out how this syntax structure is encoded in the AST, it is recommended to run
-`rustc -Z ast-json` on an example of the structure and compare with the [nodes in the AST docs].
+`rustc -Z unpretty=ast-tree` on an example of the structure and compare with the [nodes in the AST docs].
 Usually the lint will end up to be a nested series of matches and ifs, [like so][deep-nesting].
-But we can make it nest-less by using [if_chain] macro, [like this][nest-less].
+But we can make it nest-less by using [let chains], [like this][nest-less].
 
 [`E-medium`] issues are generally pretty easy too, though it's recommended you work on an [`good-first-issue`]
 first. Sometimes they are only somewhat involved code wise, but not difficult per-se.
@@ -87,9 +87,9 @@ an AST expression). `match_def_path()` in Clippy's `utils` module can also be us
 [`E-medium`]: https://github.com/rust-lang/rust-clippy/labels/E-medium
 [`ty`]: https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/ty
 [nodes in the AST docs]: https://doc.rust-lang.org/nightly/nightly-rustc/rustc_ast/ast/
-[deep-nesting]: https://github.com/rust-lang/rust-clippy/blob/557f6848bd5b7183f55c1e1522a326e9e1df6030/clippy_lints/src/mem_forget.rs#L29-L43
-[if_chain]: https://docs.rs/if_chain/*/if_chain
-[nest-less]: https://github.com/rust-lang/rust-clippy/blob/557f6848bd5b7183f55c1e1522a326e9e1df6030/clippy_lints/src/bit_mask.rs#L124-L150
+[deep-nesting]: https://github.com/rust-lang/rust-clippy/blob/5e4f0922911536f80d9591180fa604229ac13939/clippy_lints/src/mem_forget.rs#L31-L45
+[let chains]: https://github.com/rust-lang/rust/pull/94927
+[nest-less]: https://github.com/rust-lang/rust-clippy/blob/5e4f0922911536f80d9591180fa604229ac13939/clippy_lints/src/bit_mask.rs#L133-L159
 
 ## Writing code
 
@@ -118,7 +118,7 @@ which `IntelliJ Rust` will be able to understand.
 Run `cargo dev setup intellij --repo-path <repo-path>` where `<repo-path>` is a path to the rustc repo
 you just cloned.
 The command will add path-dependencies pointing towards rustc-crates inside the rustc repo to
-Clippys `Cargo.toml`s and should allow `IntelliJ Rust` to understand most of the types that Clippy uses.
+Clippy's `Cargo.toml`s and should allow `IntelliJ Rust` to understand most of the types that Clippy uses.
 Just make sure to remove the dependencies again before finally making a pull request!
 
 [rustc_repo]: https://github.com/rust-lang/rust/
@@ -126,8 +126,8 @@ Just make sure to remove the dependencies again before finally making a pull req
 
 ### Rust Analyzer
 As of [#6869][6869], [`rust-analyzer`][ra_homepage] can understand that Clippy uses compiler-internals
-using `extern crate` when `package.metadata.rust-analyzer.rustc_private` is set to `true` in Clippys `Cargo.toml.`
-You will required a `nightly` toolchain with the `rustc-dev` component installed.
+using `extern crate` when `package.metadata.rust-analyzer.rustc_private` is set to `true` in Clippy's `Cargo.toml.`
+You will require a `nightly` toolchain with the `rustc-dev` component installed.
 Make sure that in the `rust-analyzer` configuration, you set
 ```
 { "rust-analyzer.rustcSource": "discover" }
@@ -228,7 +228,7 @@ about `subtree`s in the Rust repository see [Rust's `CONTRIBUTING.md`][subtree].
 
 ### Patching git-subtree to work with big repos
 
-Currently there's a bug in `git-subtree` that prevents it from working properly
+Currently, there's a bug in `git-subtree` that prevents it from working properly
 with the [`rust-lang/rust`] repo. There's an open PR to fix that, but it's stale.
 Before continuing with the following steps, we need to manually apply that fix to
 our local copy of `git-subtree`.

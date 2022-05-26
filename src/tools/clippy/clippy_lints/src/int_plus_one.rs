@@ -28,6 +28,7 @@ declare_clippy_lint! {
     /// # let y = 1;
     /// if x > y {}
     /// ```
+    #[clippy::version = "pre 1.29.0"]
     pub INT_PLUS_ONE,
     complexity,
     "instead of using `x >= y + 1`, use `x > y`"
@@ -51,7 +52,7 @@ enum Side {
 }
 
 impl IntPlusOne {
-    #[allow(clippy::cast_sign_loss)]
+    #[expect(clippy::cast_sign_loss)]
     fn check_lit(lit: &Lit, target_value: i128) -> bool {
         if let LitKind::Int(value, ..) = lit.kind {
             return value == (target_value as u128);

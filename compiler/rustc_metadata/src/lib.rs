@@ -1,15 +1,21 @@
 #![doc(html_root_url = "https://doc.rust-lang.org/nightly/nightly-rustc/")]
-#![feature(crate_visibility_modifier)]
+#![feature(decl_macro)]
 #![feature(drain_filter)]
-#![feature(in_band_lifetimes)]
+#![feature(generators)]
+#![feature(generic_associated_types)]
+#![feature(let_chains)]
 #![feature(let_else)]
 #![feature(nll)]
 #![feature(once_cell)]
 #![feature(proc_macro_internals)]
+#![feature(macro_metavar_expr)]
 #![feature(min_specialization)]
+#![feature(slice_as_chunks)]
+#![feature(trusted_len)]
 #![feature(try_blocks)]
 #![feature(never_type)]
 #![recursion_limit = "256"]
+#![allow(rustc::potential_query_instability)]
 
 extern crate proc_macro;
 
@@ -28,7 +34,6 @@ mod native_libs;
 mod rmeta;
 
 pub mod creader;
-pub mod dynamic_lib;
 pub mod locator;
 
 pub use rmeta::{encode_metadata, EncodedMetadata, METADATA_HEADER};
