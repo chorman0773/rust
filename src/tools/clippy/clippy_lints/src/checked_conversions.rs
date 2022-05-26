@@ -30,12 +30,12 @@ declare_clippy_lint! {
     /// Could be written:
     ///
     /// ```rust
-    /// # use std::convert::TryFrom;
     /// # let foo = 1;
     /// # let _ =
     /// i32::try_from(foo).is_ok()
     /// # ;
     /// ```
+    #[clippy::version = "1.37.0"]
     pub CHECKED_CONVERSIONS,
     pedantic,
     "`try_from` could replace manual bounds checking when casting"
@@ -56,7 +56,7 @@ impl_lint_pass!(CheckedConversions => [CHECKED_CONVERSIONS]);
 
 impl<'tcx> LateLintPass<'tcx> for CheckedConversions {
     fn check_expr(&mut self, cx: &LateContext<'_>, item: &Expr<'_>) {
-        if !meets_msrv(self.msrv.as_ref(), &msrvs::TRY_FROM) {
+        if !meets_msrv(self.msrv, msrvs::TRY_FROM) {
             return;
         }
 
@@ -122,7 +122,7 @@ struct Conversion<'a> {
 }
 
 /// The kind of conversion that is checked
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum ConversionType {
     SignedToUnsigned,
     SignedToSigned,
@@ -320,8 +320,8 @@ fn get_implementing_type<'a>(path: &QPath<'_>, candidates: &'a [&str], function:
         if let TyKind::Path(QPath::Resolved(None, tp)) = &ty.kind;
         if let [int] = &*tp.segments;
         then {
-            let name = &int.ident.name.as_str();
-            candidates.iter().find(|c| name == *c).copied()
+            let name = int.ident.name.as_str();
+            candidates.iter().find(|c| &name == *c).copied()
         } else {
             None
         }
@@ -334,8 +334,8 @@ fn int_ty_to_sym<'tcx>(path: &QPath<'_>) -> Option<&'tcx str> {
         if let QPath::Resolved(_, path) = *path;
         if let [ty] = &*path.segments;
         then {
-            let name = &ty.ident.name.as_str();
-            INTS.iter().find(|c| name == *c).copied()
+            let name = ty.ident.name.as_str();
+            INTS.iter().find(|c| &name == *c).copied()
         } else {
             None
         }

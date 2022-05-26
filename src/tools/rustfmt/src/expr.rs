@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::cmp::min;
 
 use itertools::Itertools;
-use rustc_ast::token::{DelimToken, LitKind};
+use rustc_ast::token::{Delimiter, LitKind};
 use rustc_ast::{ast, ptr};
 use rustc_span::{BytePos, Span};
 
@@ -108,9 +108,21 @@ pub(crate) fn format_expr(
         ast::ExprKind::Unary(op, ref subexpr) => rewrite_unary_op(context, op, subexpr, shape),
         ast::ExprKind::Struct(ref struct_expr) => {
             let ast::StructExpr {
-                fields, path, rest, ..
+                qself,
+                fields,
+                path,
+                rest,
             } = &**struct_expr;
-            rewrite_struct_lit(context, path, fields, rest, &expr.attrs, expr.span, shape)
+            rewrite_struct_lit(
+                context,
+                path,
+                qself.as_ref(),
+                fields,
+                rest,
+                &expr.attrs,
+                expr.span,
+                shape,
+            )
         }
         ast::ExprKind::Tup(ref items) => {
             rewrite_tuple(context, items.iter(), expr.span, shape, items.len() == 1)
@@ -196,9 +208,10 @@ pub(crate) fn format_expr(
                 capture, is_async, movability, fn_decl, body, expr.span, context, shape,
             )
         }
-        ast::ExprKind::Try(..) | ast::ExprKind::Field(..) | ast::ExprKind::MethodCall(..) => {
-            rewrite_chain(expr, context, shape)
-        }
+        ast::ExprKind::Try(..)
+        | ast::ExprKind::Field(..)
+        | ast::ExprKind::MethodCall(..)
+        | ast::ExprKind::Await(_) => rewrite_chain(expr, context, shape),
         ast::ExprKind::MacCall(ref mac) => {
             rewrite_macro(mac, None, context, shape, MacroPosition::Expression).or_else(|| {
                 wrap_str(
@@ -211,6 +224,10 @@ pub(crate) fn format_expr(
         ast::ExprKind::Ret(None) => Some("return".to_owned()),
         ast::ExprKind::Ret(Some(ref expr)) => {
             rewrite_unary_prefix(context, "return ", &**expr, shape)
+        }
+        ast::ExprKind::Yeet(None) => Some("do yeet".to_owned()),
+        ast::ExprKind::Yeet(Some(ref expr)) => {
+            rewrite_unary_prefix(context, "do yeet ", &**expr, shape)
         }
         ast::ExprKind::Box(ref expr) => rewrite_unary_prefix(context, "box ", &**expr, shape),
         ast::ExprKind::AddrOf(borrow_kind, mutability, ref expr) => {
@@ -257,7 +274,7 @@ pub(crate) fn format_expr(
                         }
                         _ => false,
                     },
-                    ast::ExprKind::Unary(_, ref expr) => needs_space_before_range(context, &expr),
+                    ast::ExprKind::Unary(_, ref expr) => needs_space_before_range(context, expr),
                     _ => false,
                 }
             }
@@ -321,9 +338,7 @@ pub(crate) fn format_expr(
         // satisfy our width restrictions.
         // Style Guide RFC for InlineAsm variant pending
         // https://github.com/rust-dev-tools/fmt-rfcs/issues/152
-        ast::ExprKind::LlvmInlineAsm(..) | ast::ExprKind::InlineAsm(..) => {
-            Some(context.snippet(expr.span).to_owned())
-        }
+        ast::ExprKind::InlineAsm(..) => Some(context.snippet(expr.span).to_owned()),
         ast::ExprKind::TryBlock(ref block) => {
             if let rw @ Some(_) =
                 rewrite_single_line_block(context, "try ", block, Some(&expr.attrs), None, shape)
@@ -377,7 +392,6 @@ pub(crate) fn format_expr(
                 ))
             }
         }
-        ast::ExprKind::Await(_) => rewrite_chain(expr, context, shape),
         ast::ExprKind::Underscore => Some("_".to_owned()),
         ast::ExprKind::Err => None,
     };
@@ -402,7 +416,7 @@ pub(crate) fn rewrite_array<'a, T: 'a + IntoOverflowableItem<'a>>(
     context: &'a RewriteContext<'_>,
     shape: Shape,
     force_separator_tactic: Option<SeparatorTactic>,
-    delim_token: Option<DelimToken>,
+    delim_token: Option<Delimiter>,
 ) -> Option<String> {
     overflow::rewrite_with_square_brackets(
         context,
@@ -423,7 +437,7 @@ fn rewrite_empty_block(
     prefix: &str,
     shape: Shape,
 ) -> Option<String> {
-    if block_has_statements(&block) {
+    if block_has_statements(block) {
         return None;
     }
 
@@ -829,6 +843,7 @@ impl<'a> ControlFlow<'a> {
                 &format!("{}{}{}", matcher, pat_string, self.connector),
                 expr,
                 cond_shape,
+                &RhsAssignKind::Expr(&expr.kind, expr.span),
                 RhsTactics::Default,
                 comments_span,
                 true,
@@ -1148,7 +1163,7 @@ pub(crate) fn is_empty_block(
     block: &ast::Block,
     attrs: Option<&[ast::Attribute]>,
 ) -> bool {
-    !block_has_statements(&block)
+    !block_has_statements(block)
         && !block_contains_comment(context, block)
         && attrs.map_or(true, |a| inner_attributes(a).is_empty())
 }
@@ -1207,11 +1222,11 @@ fn rewrite_int_lit(context: &RewriteContext<'_>, lit: &ast::Lit, shape: Shape) -
     let span = lit.span;
     let symbol = lit.token.symbol.as_str();
 
-    if symbol.starts_with("0x") {
+    if let Some(symbol_stripped) = symbol.strip_prefix("0x") {
         let hex_lit = match context.config.hex_literal_case() {
             HexLiteralCase::Preserve => None,
-            HexLiteralCase::Upper => Some(symbol[2..].to_ascii_uppercase()),
-            HexLiteralCase::Lower => Some(symbol[2..].to_ascii_lowercase()),
+            HexLiteralCase::Upper => Some(symbol_stripped.to_ascii_uppercase()),
+            HexLiteralCase::Lower => Some(symbol_stripped.to_ascii_lowercase()),
         };
         if let Some(hex_lit) = hex_lit {
             return wrap_str(
@@ -1314,7 +1329,7 @@ pub(crate) fn can_be_overflowed_expr(
         }
         ast::ExprKind::MacCall(ref mac) => {
             match (
-                rustc_ast::ast::MacDelimiter::from_token(mac.args.delim()),
+                rustc_ast::ast::MacDelimiter::from_token(mac.args.delim().unwrap()),
                 context.config.overflow_delimited_expr(),
             ) {
                 (Some(ast::MacDelimiter::Bracket), true)
@@ -1510,6 +1525,7 @@ fn struct_lit_can_be_aligned(fields: &[ast::ExprField], has_base: bool) -> bool 
 fn rewrite_struct_lit<'a>(
     context: &RewriteContext<'_>,
     path: &ast::Path,
+    qself: Option<&ast::QSelf>,
     fields: &'a [ast::ExprField],
     struct_rest: &ast::StructRest,
     attrs: &[ast::Attribute],
@@ -1521,12 +1537,12 @@ fn rewrite_struct_lit<'a>(
     enum StructLitField<'a> {
         Regular(&'a ast::ExprField),
         Base(&'a ast::Expr),
-        Rest(&'a Span),
+        Rest(Span),
     }
 
     // 2 = " {".len()
     let path_shape = shape.sub_width(2)?;
-    let path_str = rewrite_path(context, PathContext::Expr, None, path, path_shape)?;
+    let path_str = rewrite_path(context, PathContext::Expr, qself, path, path_shape)?;
 
     let has_base_or_rest = match struct_rest {
         ast::StructRest::None if fields.is_empty() => return Some(format!("{} {{}}", path_str)),
@@ -1556,7 +1572,7 @@ fn rewrite_struct_lit<'a>(
         let field_iter = fields.iter().map(StructLitField::Regular).chain(
             match struct_rest {
                 ast::StructRest::Base(expr) => Some(StructLitField::Base(&**expr)),
-                ast::StructRest::Rest(span) => Some(StructLitField::Rest(span)),
+                ast::StructRest::Rest(span) => Some(StructLitField::Rest(*span)),
                 ast::StructRest::None => None,
             }
             .into_iter(),
@@ -1621,7 +1637,7 @@ fn rewrite_struct_lit<'a>(
     };
 
     let fields_str =
-        wrap_struct_field(context, &attrs, &fields_str, shape, v_shape, one_line_width)?;
+        wrap_struct_field(context, attrs, &fields_str, shape, v_shape, one_line_width)?;
     Some(format!("{} {{{}}}", path_str, fields_str))
 
     // FIXME if context.config.indent_style() == Visual, but we run out
@@ -1839,6 +1855,34 @@ fn rewrite_unary_op(
     rewrite_unary_prefix(context, ast::UnOp::to_string(op), expr, shape)
 }
 
+pub(crate) enum RhsAssignKind<'ast> {
+    Expr(&'ast ast::ExprKind, Span),
+    Bounds,
+    Ty,
+}
+
+impl<'ast> RhsAssignKind<'ast> {
+    // TODO(calebcartwright)
+    // Preemptive addition for handling RHS with chains, not yet utilized.
+    // It may make more sense to construct the chain first and then check
+    // whether there are actually chain elements.
+    #[allow(dead_code)]
+    fn is_chain(&self) -> bool {
+        match self {
+            RhsAssignKind::Expr(kind, _) => {
+                matches!(
+                    kind,
+                    ast::ExprKind::Try(..)
+                        | ast::ExprKind::Field(..)
+                        | ast::ExprKind::MethodCall(..)
+                        | ast::ExprKind::Await(_)
+                )
+            }
+            _ => false,
+        }
+    }
+}
+
 fn rewrite_assignment(
     context: &RewriteContext<'_>,
     lhs: &ast::Expr,
@@ -1855,7 +1899,13 @@ fn rewrite_assignment(
     let lhs_shape = shape.sub_width(operator_str.len() + 1)?;
     let lhs_str = format!("{} {}", lhs.rewrite(context, lhs_shape)?, operator_str);
 
-    rewrite_assign_rhs(context, lhs_str, rhs, shape)
+    rewrite_assign_rhs(
+        context,
+        lhs_str,
+        rhs,
+        &RhsAssignKind::Expr(&rhs.kind, rhs.span),
+        shape,
+    )
 }
 
 /// Controls where to put the rhs.
@@ -1876,9 +1926,10 @@ pub(crate) fn rewrite_assign_rhs<S: Into<String>, R: Rewrite>(
     context: &RewriteContext<'_>,
     lhs: S,
     ex: &R,
+    rhs_kind: &RhsAssignKind<'_>,
     shape: Shape,
 ) -> Option<String> {
-    rewrite_assign_rhs_with(context, lhs, ex, shape, RhsTactics::Default)
+    rewrite_assign_rhs_with(context, lhs, ex, shape, rhs_kind, RhsTactics::Default)
 }
 
 pub(crate) fn rewrite_assign_rhs_expr<R: Rewrite>(
@@ -1886,9 +1937,10 @@ pub(crate) fn rewrite_assign_rhs_expr<R: Rewrite>(
     lhs: &str,
     ex: &R,
     shape: Shape,
+    rhs_kind: &RhsAssignKind<'_>,
     rhs_tactics: RhsTactics,
 ) -> Option<String> {
-    let last_line_width = last_line_width(&lhs).saturating_sub(if lhs.contains('\n') {
+    let last_line_width = last_line_width(lhs).saturating_sub(if lhs.contains('\n') {
         shape.indent.width()
     } else {
         0
@@ -1910,6 +1962,7 @@ pub(crate) fn rewrite_assign_rhs_expr<R: Rewrite>(
         ex,
         orig_shape,
         ex.rewrite(context, orig_shape),
+        rhs_kind,
         rhs_tactics,
         has_rhs_comment,
     )
@@ -1920,10 +1973,11 @@ pub(crate) fn rewrite_assign_rhs_with<S: Into<String>, R: Rewrite>(
     lhs: S,
     ex: &R,
     shape: Shape,
+    rhs_kind: &RhsAssignKind<'_>,
     rhs_tactics: RhsTactics,
 ) -> Option<String> {
     let lhs = lhs.into();
-    let rhs = rewrite_assign_rhs_expr(context, &lhs, ex, shape, rhs_tactics)?;
+    let rhs = rewrite_assign_rhs_expr(context, &lhs, ex, shape, rhs_kind, rhs_tactics)?;
     Some(lhs + &rhs)
 }
 
@@ -1932,6 +1986,7 @@ pub(crate) fn rewrite_assign_rhs_with_comments<S: Into<String>, R: Rewrite>(
     lhs: S,
     ex: &R,
     shape: Shape,
+    rhs_kind: &RhsAssignKind<'_>,
     rhs_tactics: RhsTactics,
     between_span: Span,
     allow_extend: bool,
@@ -1943,11 +1998,11 @@ pub(crate) fn rewrite_assign_rhs_with_comments<S: Into<String>, R: Rewrite>(
     } else {
         shape
     };
-    let rhs = rewrite_assign_rhs_expr(context, &lhs, ex, shape, rhs_tactics)?;
+    let rhs = rewrite_assign_rhs_expr(context, &lhs, ex, shape, rhs_kind, rhs_tactics)?;
 
     if contains_comment {
         let rhs = rhs.trim_start();
-        combine_strs_with_missing_comments(context, &lhs, &rhs, between_span, shape, allow_extend)
+        combine_strs_with_missing_comments(context, &lhs, rhs, between_span, shape, allow_extend)
     } else {
         Some(lhs + &rhs)
     }
@@ -1958,10 +2013,12 @@ fn choose_rhs<R: Rewrite>(
     expr: &R,
     shape: Shape,
     orig_rhs: Option<String>,
+    _rhs_kind: &RhsAssignKind<'_>,
     rhs_tactics: RhsTactics,
     has_rhs_comment: bool,
 ) -> Option<String> {
     match orig_rhs {
+        Some(ref new_str) if new_str.is_empty() => Some(String::new()),
         Some(ref new_str)
             if !new_str.contains('\n') && unicode_str_width(new_str) <= shape.width =>
         {

@@ -1,6 +1,5 @@
 use crate::cell::UnsafeCell;
 use crate::collections::VecDeque;
-use crate::ffi::c_void;
 use crate::hint;
 use crate::ops::{Deref, DerefMut, Drop};
 use crate::ptr;
@@ -46,8 +45,17 @@ impl<T> Spinlock<T> {
     #[inline]
     fn obtain_lock(&self) {
         let ticket = self.queue.fetch_add(1, Ordering::SeqCst) + 1;
+        let mut counter: u16 = 0;
         while self.dequeue.load(Ordering::SeqCst) != ticket {
-            hint::spin_loop();
+            counter += 1;
+            if counter < 100 {
+                hint::spin_loop();
+            } else {
+                counter = 0;
+                unsafe {
+                    abi::yield_now();
+                }
+            }
         }
     }
 
@@ -210,39 +218,4 @@ impl Mutex {
 
     #[inline]
     pub unsafe fn destroy(&self) {}
-}
-
-pub struct ReentrantMutex {
-    inner: *const c_void,
-}
-
-impl ReentrantMutex {
-    pub const unsafe fn uninitialized() -> ReentrantMutex {
-        ReentrantMutex { inner: ptr::null() }
-    }
-
-    #[inline]
-    pub unsafe fn init(&self) {
-        let _ = abi::recmutex_init(&self.inner as *const *const c_void as *mut _);
-    }
-
-    #[inline]
-    pub unsafe fn lock(&self) {
-        let _ = abi::recmutex_lock(self.inner);
-    }
-
-    #[inline]
-    pub unsafe fn try_lock(&self) -> bool {
-        true
-    }
-
-    #[inline]
-    pub unsafe fn unlock(&self) {
-        let _ = abi::recmutex_unlock(self.inner);
-    }
-
-    #[inline]
-    pub unsafe fn destroy(&self) {
-        let _ = abi::recmutex_destroy(self.inner);
-    }
 }

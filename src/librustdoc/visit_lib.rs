@@ -1,17 +1,14 @@
 use rustc_data_structures::fx::FxHashSet;
 use rustc_hir::def::{DefKind, Res};
-use rustc_hir::def_id::{CrateNum, DefId, CRATE_DEF_INDEX};
+use rustc_hir::def_id::{CrateNum, DefId};
 use rustc_middle::middle::privacy::{AccessLevel, AccessLevels};
-use rustc_middle::ty::{TyCtxt, Visibility};
-use rustc_span::symbol::sym;
-
-use crate::clean::{AttributesExt, NestedAttributesExt};
+use rustc_middle::ty::TyCtxt;
 
 // FIXME: this may not be exhaustive, but is sufficient for rustdocs current uses
 
 /// Similar to `librustc_privacy::EmbargoVisitor`, but also takes
 /// specific rustdoc annotations into account (i.e., `doc(hidden)`)
-crate struct LibEmbargoVisitor<'a, 'tcx> {
+pub(crate) struct LibEmbargoVisitor<'a, 'tcx> {
     tcx: TyCtxt<'tcx>,
     // Accessibility levels for reachable nodes
     access_levels: &'a mut AccessLevels<DefId>,
@@ -22,7 +19,7 @@ crate struct LibEmbargoVisitor<'a, 'tcx> {
 }
 
 impl<'a, 'tcx> LibEmbargoVisitor<'a, 'tcx> {
-    crate fn new(cx: &'a mut crate::core::DocContext<'tcx>) -> LibEmbargoVisitor<'a, 'tcx> {
+    pub(crate) fn new(cx: &'a mut crate::core::DocContext<'tcx>) -> LibEmbargoVisitor<'a, 'tcx> {
         LibEmbargoVisitor {
             tcx: cx.tcx,
             access_levels: &mut cx.cache.access_levels,
@@ -31,15 +28,15 @@ impl<'a, 'tcx> LibEmbargoVisitor<'a, 'tcx> {
         }
     }
 
-    crate fn visit_lib(&mut self, cnum: CrateNum) {
-        let did = DefId { krate: cnum, index: CRATE_DEF_INDEX };
+    pub(crate) fn visit_lib(&mut self, cnum: CrateNum) {
+        let did = cnum.as_def_id();
         self.update(did, Some(AccessLevel::Public));
         self.visit_mod(did);
     }
 
     // Updates node level and returns the updated level
     fn update(&mut self, did: DefId, level: Option<AccessLevel>) -> Option<AccessLevel> {
-        let is_hidden = self.tcx.get_attrs(did).lists(sym::doc).has_word(sym::hidden);
+        let is_hidden = self.tcx.is_doc_hidden(did);
 
         let old_level = self.access_levels.map.get(&did).cloned();
         // Accessibility levels can only grow
@@ -51,15 +48,15 @@ impl<'a, 'tcx> LibEmbargoVisitor<'a, 'tcx> {
         }
     }
 
-    crate fn visit_mod(&mut self, def_id: DefId) {
+    pub(crate) fn visit_mod(&mut self, def_id: DefId) {
         if !self.visited_mods.insert(def_id) {
             return;
         }
 
-        for item in self.tcx.item_children(def_id).iter() {
+        for item in self.tcx.module_children(def_id).iter() {
             if let Some(def_id) = item.res.opt_def_id() {
                 if self.tcx.def_key(def_id).parent.map_or(false, |d| d == def_id.index)
-                    || item.vis == Visibility::Public
+                    || item.vis.is_public()
                 {
                     self.visit_item(item.res);
                 }
@@ -70,7 +67,7 @@ impl<'a, 'tcx> LibEmbargoVisitor<'a, 'tcx> {
     fn visit_item(&mut self, res: Res<!>) {
         let def_id = res.def_id();
         let vis = self.tcx.visibility(def_id);
-        let inherited_item_level = if vis == Visibility::Public { self.prev_level } else { None };
+        let inherited_item_level = if vis.is_public() { self.prev_level } else { None };
 
         let item_level = self.update(def_id, inherited_item_level);
 

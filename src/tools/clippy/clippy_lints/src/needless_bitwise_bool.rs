@@ -1,5 +1,4 @@
 use clippy_utils::diagnostics::span_lint_and_then;
-use clippy_utils::in_macro;
 use clippy_utils::source::snippet_opt;
 use if_chain::if_chain;
 use rustc_errors::Applicability;
@@ -31,6 +30,7 @@ declare_clippy_lint! {
     /// let (x,y) = (true, false);
     /// if x && !y {}
     /// ```
+    #[clippy::version = "1.54.0"]
     pub NEEDLESS_BITWISE_BOOL,
     pedantic,
     "Boolean expressions that use bitwise rather than lazy operators"
@@ -41,7 +41,7 @@ declare_lint_pass!(NeedlessBitwiseBool => [NEEDLESS_BITWISE_BOOL]);
 fn is_bitwise_operation(cx: &LateContext<'_>, expr: &Expr<'_>) -> bool {
     let ty = cx.typeck_results().expr_ty(expr);
     if_chain! {
-        if !in_macro(expr.span);
+        if !expr.span.from_expansion();
         if let (&ExprKind::Binary(ref op, _, right), &ty::Bool) = (&expr.kind, &ty.kind());
         if op.node == BinOpKind::BitAnd || op.node == BinOpKind::BitOr;
         if let ExprKind::Call(..) | ExprKind::MethodCall(..) | ExprKind::Binary(..) | ExprKind::Unary(..) = right.kind;
@@ -53,7 +53,7 @@ fn is_bitwise_operation(cx: &LateContext<'_>, expr: &Expr<'_>) -> bool {
     false
 }
 
-fn suggession_snippet(cx: &LateContext<'_>, expr: &Expr<'_>) -> Option<String> {
+fn suggestion_snippet(cx: &LateContext<'_>, expr: &Expr<'_>) -> Option<String> {
     if let ExprKind::Binary(ref op, left, right) = expr.kind {
         if let (Some(l_snippet), Some(r_snippet)) = (snippet_opt(cx, left.span), snippet_opt(cx, right.span)) {
             let op_snippet = match op.node {
@@ -75,7 +75,7 @@ impl LateLintPass<'_> for NeedlessBitwiseBool {
                 expr.span,
                 "use of bitwise operator instead of lazy operator between booleans",
                 |diag| {
-                    if let Some(sugg) = suggession_snippet(cx, expr) {
+                    if let Some(sugg) = suggestion_snippet(cx, expr) {
                         diag.span_suggestion(expr.span, "try", sugg, Applicability::MachineApplicable);
                     }
                 },

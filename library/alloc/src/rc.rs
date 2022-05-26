@@ -313,6 +313,12 @@ pub struct Rc<T: ?Sized> {
 
 #[stable(feature = "rust1", since = "1.0.0")]
 impl<T: ?Sized> !marker::Send for Rc<T> {}
+
+// Note that this negative impl isn't strictly necessary for correctness,
+// as `Rc` transitively contains a `Cell`, which is itself `!Sync`.
+// However, given how important `Rc`'s `!Sync`-ness is,
+// having an explicit negative impl is nice for documentation purposes
+// and results in nicer error messages.
 #[stable(feature = "rust1", since = "1.0.0")]
 impl<T: ?Sized> !marker::Sync for Rc<T> {}
 
@@ -335,12 +341,12 @@ impl<T: ?Sized> Rc<T> {
         unsafe { self.ptr.as_ref() }
     }
 
-    fn from_inner(ptr: NonNull<RcBox<T>>) -> Self {
+    unsafe fn from_inner(ptr: NonNull<RcBox<T>>) -> Self {
         Self { ptr, phantom: PhantomData }
     }
 
     unsafe fn from_ptr(ptr: *mut RcBox<T>) -> Self {
-        Self::from_inner(unsafe { NonNull::new_unchecked(ptr) })
+        unsafe { Self::from_inner(NonNull::new_unchecked(ptr)) }
     }
 }
 
@@ -361,38 +367,70 @@ impl<T> Rc<T> {
         // pointers, which ensures that the weak destructor never frees
         // the allocation while the strong destructor is running, even
         // if the weak pointer is stored inside the strong one.
-        Self::from_inner(
-            Box::leak(box RcBox { strong: Cell::new(1), weak: Cell::new(1), value }).into(),
-        )
+        unsafe {
+            Self::from_inner(
+                Box::leak(box RcBox { strong: Cell::new(1), weak: Cell::new(1), value }).into(),
+            )
+        }
     }
 
-    /// Constructs a new `Rc<T>` using a weak reference to itself. Attempting
-    /// to upgrade the weak reference before this function returns will result
-    /// in a `None` value. However, the weak reference may be cloned freely and
-    /// stored for use at a later time.
+    /// Constructs a new `Rc<T>` while giving you a `Weak<T>` to the allocation,
+    /// to allow you to construct a `T` which holds a weak pointer to itself.
+    ///
+    /// Generally, a structure circularly referencing itself, either directly or
+    /// indirectly, should not hold a strong reference to itself to prevent a memory leak.
+    /// Using this function, you get access to the weak pointer during the
+    /// initialization of `T`, before the `Rc<T>` is created, such that you can
+    /// clone and store it inside the `T`.
+    ///
+    /// `new_cyclic` first allocates the managed allocation for the `Rc<T>`,
+    /// then calls your closure, giving it a `Weak<T>` to this allocation,
+    /// and only afterwards completes the construction of the `Rc<T>` by placing
+    /// the `T` returned from your closure into the allocation.
+    ///
+    /// Since the new `Rc<T>` is not fully-constructed until `Rc<T>::new_cyclic`
+    /// returns, calling [`upgrade`] on the weak reference inside your closure will
+    /// fail and result in a `None` value.
+    ///
+    /// # Panics
+    ///
+    /// If `data_fn` panics, the panic is propagated to the caller, and the
+    /// temporary [`Weak<T>`] is dropped normally.
     ///
     /// # Examples
     ///
     /// ```
-    /// #![feature(arc_new_cyclic)]
-    /// #![allow(dead_code)]
+    /// # #![allow(dead_code)]
     /// use std::rc::{Rc, Weak};
     ///
     /// struct Gadget {
-    ///     self_weak: Weak<Self>,
-    ///     // ... more fields
+    ///     me: Weak<Gadget>,
     /// }
+    ///
     /// impl Gadget {
-    ///     pub fn new() -> Rc<Self> {
-    ///         Rc::new_cyclic(|self_weak| {
-    ///             Gadget { self_weak: self_weak.clone(), /* ... */ }
+    ///     /// Construct a reference counted Gadget.
+    ///     fn new() -> Rc<Self> {
+    ///         // `me` is a `Weak<Gadget>` pointing at the new allocation of the
+    ///         // `Rc` we're constructing.
+    ///         Rc::new_cyclic(|me| {
+    ///             // Create the actual struct here.
+    ///             Gadget { me: me.clone() }
     ///         })
+    ///     }
+    ///
+    ///     /// Return a reference counted pointer to Self.
+    ///     fn me(&self) -> Rc<Self> {
+    ///         self.me.upgrade().unwrap()
     ///     }
     /// }
     /// ```
+    /// [`upgrade`]: Weak::upgrade
     #[cfg(not(no_global_oom_handling))]
-    #[unstable(feature = "arc_new_cyclic", issue = "75861")]
-    pub fn new_cyclic(data_fn: impl FnOnce(&Weak<T>) -> T) -> Rc<T> {
+    #[stable(feature = "arc_new_cyclic", since = "1.60.0")]
+    pub fn new_cyclic<F>(data_fn: F) -> Rc<T>
+    where
+        F: FnOnce(&Weak<T>) -> T,
+    {
         // Construct the inner in the "uninitialized" state with a single
         // weak reference.
         let uninit_ptr: NonNull<_> = Box::leak(box RcBox {
@@ -414,16 +452,16 @@ impl<T> Rc<T> {
         // otherwise.
         let data = data_fn(&weak);
 
-        unsafe {
+        let strong = unsafe {
             let inner = init_ptr.as_ptr();
             ptr::write(ptr::addr_of_mut!((*inner).value), data);
 
             let prev_value = (*inner).strong.get();
             debug_assert_eq!(prev_value, 0, "No prior strong references should exist");
             (*inner).strong.set(1);
-        }
 
-        let strong = Rc::from_inner(init_ptr);
+            Rc::from_inner(init_ptr)
+        };
 
         // Strong references should collectively own a shared weak reference,
         // so don't run the destructor for our old weak reference.
@@ -443,12 +481,10 @@ impl<T> Rc<T> {
     ///
     /// let mut five = Rc::<u32>::new_uninit();
     ///
-    /// let five = unsafe {
-    ///     // Deferred initialization:
-    ///     Rc::get_mut_unchecked(&mut five).as_mut_ptr().write(5);
+    /// // Deferred initialization:
+    /// Rc::get_mut(&mut five).unwrap().write(5);
     ///
-    ///     five.assume_init()
-    /// };
+    /// let five = unsafe { five.assume_init() };
     ///
     /// assert_eq!(*five, 5)
     /// ```
@@ -515,10 +551,12 @@ impl<T> Rc<T> {
         // pointers, which ensures that the weak destructor never frees
         // the allocation while the strong destructor is running, even
         // if the weak pointer is stored inside the strong one.
-        Ok(Self::from_inner(
-            Box::leak(Box::try_new(RcBox { strong: Cell::new(1), weak: Cell::new(1), value })?)
-                .into(),
-        ))
+        unsafe {
+            Ok(Self::from_inner(
+                Box::leak(Box::try_new(RcBox { strong: Cell::new(1), weak: Cell::new(1), value })?)
+                    .into(),
+            ))
+        }
     }
 
     /// Constructs a new `Rc` with uninitialized contents, returning an error if the allocation fails
@@ -533,12 +571,10 @@ impl<T> Rc<T> {
     ///
     /// let mut five = Rc::<u32>::try_new_uninit()?;
     ///
-    /// let five = unsafe {
-    ///     // Deferred initialization:
-    ///     Rc::get_mut_unchecked(&mut five).as_mut_ptr().write(5);
+    /// // Deferred initialization:
+    /// Rc::get_mut(&mut five).unwrap().write(5);
     ///
-    ///     five.assume_init()
-    /// };
+    /// let five = unsafe { five.assume_init() };
     ///
     /// assert_eq!(*five, 5);
     /// # Ok::<(), std::alloc::AllocError>(())
@@ -650,14 +686,13 @@ impl<T> Rc<[T]> {
     ///
     /// let mut values = Rc::<[u32]>::new_uninit_slice(3);
     ///
-    /// let values = unsafe {
-    ///     // Deferred initialization:
-    ///     Rc::get_mut_unchecked(&mut values)[0].as_mut_ptr().write(1);
-    ///     Rc::get_mut_unchecked(&mut values)[1].as_mut_ptr().write(2);
-    ///     Rc::get_mut_unchecked(&mut values)[2].as_mut_ptr().write(3);
+    /// // Deferred initialization:
+    /// let data = Rc::get_mut(&mut values).unwrap();
+    /// data[0].write(1);
+    /// data[1].write(2);
+    /// data[2].write(3);
     ///
-    ///     values.assume_init()
-    /// };
+    /// let values = unsafe { values.assume_init() };
     ///
     /// assert_eq!(*values, [1, 2, 3])
     /// ```
@@ -728,19 +763,17 @@ impl<T> Rc<mem::MaybeUninit<T>> {
     ///
     /// let mut five = Rc::<u32>::new_uninit();
     ///
-    /// let five = unsafe {
-    ///     // Deferred initialization:
-    ///     Rc::get_mut_unchecked(&mut five).as_mut_ptr().write(5);
+    /// // Deferred initialization:
+    /// Rc::get_mut(&mut five).unwrap().write(5);
     ///
-    ///     five.assume_init()
-    /// };
+    /// let five = unsafe { five.assume_init() };
     ///
     /// assert_eq!(*five, 5)
     /// ```
     #[unstable(feature = "new_uninit", issue = "63291")]
     #[inline]
     pub unsafe fn assume_init(self) -> Rc<T> {
-        Rc::from_inner(mem::ManuallyDrop::new(self).ptr.cast())
+        unsafe { Rc::from_inner(mem::ManuallyDrop::new(self).ptr.cast()) }
     }
 }
 
@@ -767,14 +800,13 @@ impl<T> Rc<[mem::MaybeUninit<T>]> {
     ///
     /// let mut values = Rc::<[u32]>::new_uninit_slice(3);
     ///
-    /// let values = unsafe {
-    ///     // Deferred initialization:
-    ///     Rc::get_mut_unchecked(&mut values)[0].as_mut_ptr().write(1);
-    ///     Rc::get_mut_unchecked(&mut values)[1].as_mut_ptr().write(2);
-    ///     Rc::get_mut_unchecked(&mut values)[2].as_mut_ptr().write(3);
+    /// // Deferred initialization:
+    /// let data = Rc::get_mut(&mut values).unwrap();
+    /// data[0].write(1);
+    /// data[1].write(2);
+    /// data[2].write(3);
     ///
-    ///     values.assume_init()
-    /// };
+    /// let values = unsafe { values.assume_init() };
     ///
     /// assert_eq!(*values, [1, 2, 3])
     /// ```
@@ -875,7 +907,7 @@ impl<T: ?Sized> Rc<T> {
 
         // Reverse the offset to find the original RcBox.
         let rc_ptr =
-            unsafe { (ptr as *mut RcBox<T>).set_ptr_value((ptr as *mut u8).offset(-offset)) };
+            unsafe { (ptr as *mut u8).offset(-offset).with_metadata_of(ptr as *mut RcBox<T>) };
 
         unsafe { Self::from_ptr(rc_ptr) }
     }
@@ -1187,6 +1219,41 @@ impl<T: Clone> Rc<T> {
         // reference to the allocation.
         unsafe { &mut this.ptr.as_mut().value }
     }
+
+    /// If we have the only reference to `T` then unwrap it. Otherwise, clone `T` and return the
+    /// clone.
+    ///
+    /// Assuming `rc_t` is of type `Rc<T>`, this function is functionally equivalent to
+    /// `(*rc_t).clone()`, but will avoid cloning the inner value where possible.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// #![feature(arc_unwrap_or_clone)]
+    /// # use std::{ptr, rc::Rc};
+    /// let inner = String::from("test");
+    /// let ptr = inner.as_ptr();
+    ///
+    /// let rc = Rc::new(inner);
+    /// let inner = Rc::unwrap_or_clone(rc);
+    /// // The inner value was not cloned
+    /// assert!(ptr::eq(ptr, inner.as_ptr()));
+    ///
+    /// let rc = Rc::new(inner);
+    /// let rc2 = rc.clone();
+    /// let inner = Rc::unwrap_or_clone(rc);
+    /// // Because there were 2 references, we had to clone the inner value.
+    /// assert!(!ptr::eq(ptr, inner.as_ptr()));
+    /// // `rc2` is the last reference, so when we unwrap it we get back
+    /// // the original `String`.
+    /// let inner = Rc::unwrap_or_clone(rc2);
+    /// assert!(ptr::eq(ptr, inner.as_ptr()));
+    /// ```
+    #[inline]
+    #[unstable(feature = "arc_unwrap_or_clone", issue = "93610")]
+    pub fn unwrap_or_clone(this: Self) -> T {
+        Rc::try_unwrap(this).unwrap_or_else(|rc| (*rc).clone())
+    }
 }
 
 impl Rc<dyn Any> {
@@ -1212,9 +1279,11 @@ impl Rc<dyn Any> {
     /// ```
     pub fn downcast<T: Any>(self) -> Result<Rc<T>, Rc<dyn Any>> {
         if (*self).is::<T>() {
-            let ptr = self.ptr.cast::<RcBox<T>>();
-            forget(self);
-            Ok(Rc::from_inner(ptr))
+            unsafe {
+                let ptr = self.ptr.cast::<RcBox<T>>();
+                forget(self);
+                Ok(Rc::from_inner(ptr))
+            }
         } else {
             Err(self)
         }
@@ -1285,7 +1354,7 @@ impl<T: ?Sized> Rc<T> {
             Self::allocate_for_layout(
                 Layout::for_value(&*ptr),
                 |layout| Global.allocate(layout),
-                |mem| (ptr as *mut RcBox<T>).set_ptr_value(mem),
+                |mem| mem.with_metadata_of(ptr as *mut RcBox<T>),
             )
         }
     }
@@ -1490,8 +1559,10 @@ impl<T: ?Sized> Clone for Rc<T> {
     /// ```
     #[inline]
     fn clone(&self) -> Rc<T> {
-        self.inner().inc_strong();
-        Self::from_inner(self.ptr)
+        unsafe {
+            self.inner().inc_strong();
+            Self::from_inner(self.ptr)
+        }
     }
 }
 
@@ -1904,6 +1975,25 @@ where
     }
 }
 
+#[stable(feature = "shared_from_str", since = "1.62.0")]
+impl From<Rc<str>> for Rc<[u8]> {
+    /// Converts a reference-counted string slice into a byte slice.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use std::rc::Rc;
+    /// let string: Rc<str> = Rc::from("eggplant");
+    /// let bytes: Rc<[u8]> = Rc::from(string);
+    /// assert_eq!("eggplant".as_bytes(), bytes.as_ref());
+    /// ```
+    #[inline]
+    fn from(rc: Rc<str>) -> Self {
+        // SAFETY: `str` has the same layout as `[u8]`.
+        unsafe { Rc::from_raw(Rc::into_raw(rc) as *const [u8]) }
+    }
+}
+
 #[stable(feature = "boxed_slice_try_from", since = "1.43.0")]
 impl<T, const N: usize> TryFrom<Rc<[T]>> for Rc<[T; N]> {
     type Error = Rc<[T]>;
@@ -2060,15 +2150,15 @@ impl<T> Weak<T> {
     /// assert!(empty.upgrade().is_none());
     /// ```
     #[stable(feature = "downgraded_weak", since = "1.10.0")]
+    #[rustc_const_unstable(feature = "const_weak_new", issue = "95091", reason = "recently added")]
     #[must_use]
-    pub fn new() -> Weak<T> {
-        Weak { ptr: NonNull::new(usize::MAX as *mut RcBox<T>).expect("MAX is not 0") }
+    pub const fn new() -> Weak<T> {
+        Weak { ptr: unsafe { NonNull::new_unchecked(ptr::invalid_mut::<RcBox<T>>(usize::MAX)) } }
     }
 }
 
 pub(crate) fn is_dangling<T: ?Sized>(ptr: *mut T) -> bool {
-    let address = ptr as *mut () as usize;
-    address == usize::MAX
+    (ptr as *mut ()).addr() == usize::MAX
 }
 
 /// Helper type to allow accessing the reference counts without
@@ -2114,7 +2204,7 @@ impl<T: ?Sized> Weak<T> {
             // a valid payload address, as the payload is at least as aligned as RcBox (usize).
             ptr as *const T
         } else {
-            // SAFETY: if is_dangling returns false, then the pointer is dereferencable.
+            // SAFETY: if is_dangling returns false, then the pointer is dereferenceable.
             // The payload may be dropped at this point, and we have to maintain provenance,
             // so use raw pointer manipulation.
             unsafe { ptr::addr_of_mut!((*ptr).value) }
@@ -2211,7 +2301,7 @@ impl<T: ?Sized> Weak<T> {
             let offset = unsafe { data_offset(ptr) };
             // Thus, we reverse the offset to get the whole RcBox.
             // SAFETY: the pointer originated from a Weak, so this offset is safe.
-            unsafe { (ptr as *mut RcBox<T>).set_ptr_value((ptr as *mut u8).offset(-offset)) }
+            unsafe { (ptr as *mut u8).offset(-offset).with_metadata_of(ptr as *mut RcBox<T>) }
         };
 
         // SAFETY: we now have recovered the original Weak pointer, so can create the Weak.
@@ -2246,11 +2336,14 @@ impl<T: ?Sized> Weak<T> {
     #[stable(feature = "rc_weak", since = "1.4.0")]
     pub fn upgrade(&self) -> Option<Rc<T>> {
         let inner = self.inner()?;
+
         if inner.strong() == 0 {
             None
         } else {
-            inner.inc_strong();
-            Some(Rc::from_inner(self.ptr))
+            unsafe {
+                inner.inc_strong();
+                Some(Rc::from_inner(self.ptr))
+            }
         }
     }
 
@@ -2460,14 +2553,23 @@ trait RcInnerPtr {
     fn inc_strong(&self) {
         let strong = self.strong();
 
+        // We insert an `assume` here to hint LLVM at an otherwise
+        // missed optimization.
+        // SAFETY: The reference count will never be zero when this is
+        // called.
+        unsafe {
+            core::intrinsics::assume(strong != 0);
+        }
+
+        let strong = strong.wrapping_add(1);
+        self.strong_ref().set(strong);
+
         // We want to abort on overflow instead of dropping the value.
-        // The reference count will never be zero when this is called;
-        // nevertheless, we insert an abort here to hint LLVM at
-        // an otherwise missed optimization.
-        if strong == 0 || strong == usize::MAX {
+        // Checking for overflow after the store instead of before
+        // allows for slightly better code generation.
+        if core::intrinsics::unlikely(strong == 0) {
             abort();
         }
-        self.strong_ref().set(strong + 1);
     }
 
     #[inline]
@@ -2484,14 +2586,23 @@ trait RcInnerPtr {
     fn inc_weak(&self) {
         let weak = self.weak();
 
+        // We insert an `assume` here to hint LLVM at an otherwise
+        // missed optimization.
+        // SAFETY: The reference count will never be zero when this is
+        // called.
+        unsafe {
+            core::intrinsics::assume(weak != 0);
+        }
+
+        let weak = weak.wrapping_add(1);
+        self.weak_ref().set(weak);
+
         // We want to abort on overflow instead of dropping the value.
-        // The reference count will never be zero when this is called;
-        // nevertheless, we insert an abort here to hint LLVM at
-        // an otherwise missed optimization.
-        if weak == 0 || weak == usize::MAX {
+        // Checking for overflow after the store instead of before
+        // allows for slightly better code generation.
+        if core::intrinsics::unlikely(weak == 0) {
             abort();
         }
-        self.weak_ref().set(weak + 1);
     }
 
     #[inline]

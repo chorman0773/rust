@@ -133,7 +133,7 @@ fn to_camel_case(s: &str) -> String {
 
 impl NonCamelCaseTypes {
     fn check_case(&self, cx: &EarlyContext<'_>, sort: &str, ident: &Ident) {
-        let name = &ident.name.as_str();
+        let name = ident.name.as_str();
 
         if !is_camel_case(name) {
             cx.struct_span_lint(NON_CAMEL_CASE_TYPES, ident.span, |lint| {
@@ -164,7 +164,7 @@ impl EarlyLintPass for NonCamelCaseTypes {
         let has_repr_c = it
             .attrs
             .iter()
-            .any(|attr| attr::find_repr_attrs(&cx.sess, attr).contains(&attr::ReprC));
+            .any(|attr| attr::find_repr_attrs(cx.sess(), attr).contains(&attr::ReprC));
 
         if has_repr_c {
             return;
@@ -276,7 +276,7 @@ impl NonSnakeCase {
             })
         }
 
-        let name = &ident.name.as_str();
+        let name = ident.name.as_str();
 
         if !is_snake_case(name) {
             cx.struct_span_lint(NON_SNAKE_CASE, ident.span, |lint| {
@@ -406,7 +406,7 @@ impl<'tcx> LateLintPass<'tcx> for NonSnakeCase {
                 }
                 _ => (),
             },
-            FnKind::ItemFn(ident, _, header, _) => {
+            FnKind::ItemFn(ident, _, header) => {
                 // Skip foreign-ABI #[no_mangle] functions (Issue #31924)
                 if header.abi != Abi::Rust && cx.sess().contains_name(attrs, sym::no_mangle) {
                     return;
@@ -484,7 +484,7 @@ declare_lint_pass!(NonUpperCaseGlobals => [NON_UPPER_CASE_GLOBALS]);
 
 impl NonUpperCaseGlobals {
     fn check_upper_case(cx: &LateContext<'_>, sort: &str, ident: &Ident) {
-        let name = &ident.name.as_str();
+        let name = ident.name.as_str();
         if name.chars().any(|c| c.is_lowercase()) {
             cx.struct_span_lint(NON_UPPER_CASE_GLOBALS, ident.span, |lint| {
                 let uc = NonSnakeCase::to_snake_case(&name).to_uppercase();

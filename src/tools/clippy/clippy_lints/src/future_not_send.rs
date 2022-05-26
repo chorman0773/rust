@@ -5,7 +5,7 @@ use rustc_hir::{Body, FnDecl, HirId};
 use rustc_infer::infer::TyCtxtInferExt;
 use rustc_lint::{LateContext, LateLintPass};
 use rustc_middle::ty::subst::Subst;
-use rustc_middle::ty::{Opaque, PredicateKind::Trait};
+use rustc_middle::ty::{EarlyBinder, Opaque, PredicateKind::Trait};
 use rustc_session::{declare_lint_pass, declare_tool_lint};
 use rustc_span::{sym, Span};
 use rustc_trait_selection::traits::error_reporting::suggestions::InferCtxtExt;
@@ -41,6 +41,7 @@ declare_clippy_lint! {
     /// ```rust
     /// async fn is_send(bytes: std::sync::Arc<[u8]>) {}
     /// ```
+    #[clippy::version = "1.44.0"]
     pub FUTURE_NOT_SEND,
     nursery,
     "public Futures must be Send"
@@ -66,9 +67,9 @@ impl<'tcx> LateLintPass<'tcx> for FutureNotSend {
             let preds = cx.tcx.explicit_item_bounds(id);
             let mut is_future = false;
             for &(p, _span) in preds {
-                let p = p.subst(cx.tcx, subst);
-                if let Some(trait_ref) = p.to_opt_poly_trait_ref() {
-                    if Some(trait_ref.value.def_id()) == cx.tcx.lang_items().future_trait() {
+                let p = EarlyBinder(p).subst(cx.tcx, subst);
+                if let Some(trait_pred) = p.to_opt_poly_trait_pred() {
+                    if Some(trait_pred.skip_binder().trait_ref.def_id) == cx.tcx.lang_items().future_trait() {
                         is_future = true;
                         break;
                     }
@@ -77,13 +78,13 @@ impl<'tcx> LateLintPass<'tcx> for FutureNotSend {
             if is_future {
                 let send_trait = cx.tcx.get_diagnostic_item(sym::Send).unwrap();
                 let span = decl.output.span();
-                let send_result = cx.tcx.infer_ctxt().enter(|infcx| {
+                let send_errors = cx.tcx.infer_ctxt().enter(|infcx| {
                     let cause = traits::ObligationCause::misc(span, hir_id);
                     let mut fulfillment_cx = traits::FulfillmentContext::new();
                     fulfillment_cx.register_bound(&infcx, cx.param_env, ret_ty, send_trait, cause);
                     fulfillment_cx.select_all_or_error(&infcx)
                 });
-                if let Err(send_errors) = send_result {
+                if !send_errors.is_empty() {
                     span_lint_and_then(
                         cx,
                         FUTURE_NOT_SEND,

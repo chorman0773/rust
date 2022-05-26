@@ -48,7 +48,7 @@ impl Command {
     }
 
     pub fn sym_arg(&mut self, arg: Symbol) -> &mut Command {
-        self.arg(&*arg.as_str());
+        self.arg(arg.as_str());
         self
     }
 
@@ -105,12 +105,7 @@ impl Command {
             }
             Program::Lld(ref p, flavor) => {
                 let mut c = process::Command::new(p);
-                c.arg("-flavor").arg(match flavor {
-                    LldFlavor::Wasm => "wasm",
-                    LldFlavor::Ld => "gnu",
-                    LldFlavor::Link => "link",
-                    LldFlavor::Ld64 => "darwin",
-                });
+                c.arg("-flavor").arg(flavor.as_str());
                 if let LldFlavor::Wasm = flavor {
                     // LLVM expects host-specific formatting for @file
                     // arguments, but we always generate posix formatted files

@@ -17,6 +17,7 @@
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Object/IRObjectFile.h"
 #include "llvm/Passes/PassBuilder.h"
+#include "llvm/Passes/PassPlugin.h"
 #include "llvm/Passes/StandardInstrumentations.h"
 #include "llvm/Support/CBindingWrapping.h"
 #include "llvm/Support/FileSystem.h"
@@ -106,6 +107,7 @@ static LLVMRustPassKind toRust(PassKind Kind) {
 }
 
 extern "C" LLVMPassRef LLVMRustFindAndCreatePass(const char *PassName) {
+#if LLVM_VERSION_LT(15, 0)
   StringRef SR(PassName);
   PassRegistry *PR = PassRegistry::getPassRegistry();
 
@@ -114,36 +116,59 @@ extern "C" LLVMPassRef LLVMRustFindAndCreatePass(const char *PassName) {
     return wrap(PI->createPass());
   }
   return nullptr;
+#else
+  report_fatal_error("Legacy PM not supported with LLVM 15");
+#endif
 }
 
 extern "C" LLVMPassRef LLVMRustCreateAddressSanitizerFunctionPass(bool Recover) {
+#if LLVM_VERSION_LT(15, 0)
   const bool CompileKernel = false;
   const bool UseAfterScope = true;
 
   return wrap(createAddressSanitizerFunctionPass(CompileKernel, Recover, UseAfterScope));
+#else
+  report_fatal_error("Legacy PM not supported with LLVM 15");
+#endif
 }
 
 extern "C" LLVMPassRef LLVMRustCreateModuleAddressSanitizerPass(bool Recover) {
+#if LLVM_VERSION_LT(15, 0)
   const bool CompileKernel = false;
 
   return wrap(createModuleAddressSanitizerLegacyPassPass(CompileKernel, Recover));
+#else
+  report_fatal_error("Legacy PM not supported with LLVM 15");
+#endif
 }
 
 extern "C" LLVMPassRef LLVMRustCreateMemorySanitizerPass(int TrackOrigins, bool Recover) {
+#if LLVM_VERSION_LT(15, 0)
   const bool CompileKernel = false;
 
   return wrap(createMemorySanitizerLegacyPassPass(
       MemorySanitizerOptions{TrackOrigins, Recover, CompileKernel}));
+#else
+  report_fatal_error("Legacy PM not supported with LLVM 15");
+#endif
 }
 
 extern "C" LLVMPassRef LLVMRustCreateThreadSanitizerPass() {
+#if LLVM_VERSION_LT(15, 0)
   return wrap(createThreadSanitizerLegacyPassPass());
+#else
+  report_fatal_error("Legacy PM not supported with LLVM 15");
+#endif
 }
 
 extern "C" LLVMPassRef LLVMRustCreateHWAddressSanitizerPass(bool Recover) {
+#if LLVM_VERSION_LT(15, 0)
   const bool CompileKernel = false;
 
   return wrap(createHWAddressSanitizerLegacyPassPass(CompileKernel, Recover));
+#else
+  report_fatal_error("Legacy PM not supported with LLVM 15");
+#endif
 }
 
 extern "C" LLVMRustPassKind LLVMRustPassKind(LLVMPassRef RustPass) {
@@ -153,10 +178,57 @@ extern "C" LLVMRustPassKind LLVMRustPassKind(LLVMPassRef RustPass) {
 }
 
 extern "C" void LLVMRustAddPass(LLVMPassManagerRef PMR, LLVMPassRef RustPass) {
+#if LLVM_VERSION_LT(15, 0)
   assert(RustPass);
   Pass *Pass = unwrap(RustPass);
   PassManagerBase *PMB = unwrap(PMR);
   PMB->add(Pass);
+#else
+  report_fatal_error("Legacy PM not supported with LLVM 15");
+#endif
+}
+
+extern "C" LLVMPassManagerBuilderRef LLVMRustPassManagerBuilderCreate() {
+#if LLVM_VERSION_LT(15, 0)
+  return LLVMPassManagerBuilderCreate();
+#else
+  report_fatal_error("Legacy PM not supported with LLVM 15");
+#endif
+}
+
+extern "C" void LLVMRustPassManagerBuilderDispose(LLVMPassManagerBuilderRef PMB) {
+#if LLVM_VERSION_LT(15, 0)
+  LLVMPassManagerBuilderDispose(PMB);
+#else
+  report_fatal_error("Legacy PM not supported with LLVM 15");
+#endif
+}
+
+extern "C" void LLVMRustPassManagerBuilderPopulateFunctionPassManager(
+  LLVMPassManagerBuilderRef PMB, LLVMPassManagerRef PM) {
+#if LLVM_VERSION_LT(15, 0)
+  LLVMPassManagerBuilderPopulateFunctionPassManager(PMB, PM);
+#else
+  report_fatal_error("Legacy PM not supported with LLVM 15");
+#endif
+}
+
+extern "C" void LLVMRustPassManagerBuilderPopulateModulePassManager(
+  LLVMPassManagerBuilderRef PMB, LLVMPassManagerRef PM) {
+#if LLVM_VERSION_LT(15, 0)
+  LLVMPassManagerBuilderPopulateModulePassManager(PMB, PM);
+#else
+  report_fatal_error("Legacy PM not supported with LLVM 15");
+#endif
+}
+
+extern "C" void LLVMRustPassManagerBuilderPopulateLTOPassManager(
+  LLVMPassManagerBuilderRef PMB, LLVMPassManagerRef PM, bool Internalize, bool RunInliner) {
+#if LLVM_VERSION_LT(15, 0)
+  LLVMPassManagerBuilderPopulateLTOPassManager(PMB, PM, Internalize, RunInliner);
+#else
+  report_fatal_error("Legacy PM not supported with LLVM 15");
+#endif
 }
 
 extern "C"
@@ -164,12 +236,26 @@ void LLVMRustPassManagerBuilderPopulateThinLTOPassManager(
   LLVMPassManagerBuilderRef PMBR,
   LLVMPassManagerRef PMR
 ) {
+#if LLVM_VERSION_LT(15, 0)
   unwrap(PMBR)->populateThinLTOPassManager(*unwrap(PMR));
+#else
+  report_fatal_error("Legacy PM not supported with LLVM 15");
+#endif
+}
+
+extern "C" void LLVMRustPassManagerBuilderUseInlinerWithThreshold(
+  LLVMPassManagerBuilderRef PMB, unsigned Threshold) {
+#if LLVM_VERSION_LT(15, 0)
+  LLVMPassManagerBuilderUseInlinerWithThreshold(PMB, Threshold);
+#else
+  report_fatal_error("Legacy PM not supported with LLVM 15");
+#endif
 }
 
 extern "C"
 void LLVMRustAddLastExtensionPasses(
     LLVMPassManagerBuilderRef PMBR, LLVMPassRef *Passes, size_t NumPasses) {
+#if LLVM_VERSION_LT(15, 0)
   auto AddExtensionPasses = [Passes, NumPasses](
       const PassManagerBuilder &Builder, PassManagerBase &PM) {
     for (size_t I = 0; I < NumPasses; I++) {
@@ -182,6 +268,9 @@ void LLVMRustAddLastExtensionPasses(
                              AddExtensionPasses);
   unwrap(PMBR)->addExtension(PassManagerBuilder::EP_EnabledOnOptLevel0,
                              AddExtensionPasses);
+#else
+  report_fatal_error("Legacy PM not supported with LLVM 15");
+#endif
 }
 
 #ifdef LLVM_COMPONENT_X86
@@ -532,12 +621,16 @@ extern "C" void LLVMRustDisposeTargetMachine(LLVMTargetMachineRef TM) {
 extern "C" void LLVMRustConfigurePassManagerBuilder(
     LLVMPassManagerBuilderRef PMBR, LLVMRustCodeGenOptLevel OptLevel,
     bool MergeFunctions, bool SLPVectorize, bool LoopVectorize, bool PrepareForThinLTO,
-    const char* PGOGenPath, const char* PGOUsePath, const char* PGOSampleUsePath) {
+    const char* PGOGenPath, const char* PGOUsePath, const char* PGOSampleUsePath,
+    int SizeLevel) {
+#if LLVM_VERSION_LT(15, 0)
   unwrap(PMBR)->MergeFunctions = MergeFunctions;
   unwrap(PMBR)->SLPVectorize = SLPVectorize;
   unwrap(PMBR)->OptLevel = fromRust(OptLevel);
   unwrap(PMBR)->LoopVectorize = LoopVectorize;
   unwrap(PMBR)->PrepareForThinLTO = PrepareForThinLTO;
+  unwrap(PMBR)->SizeLevel = SizeLevel;
+  unwrap(PMBR)->DisableUnrollLoops = SizeLevel != 0;
 
   if (PGOGenPath) {
     assert(!PGOUsePath && !PGOSampleUsePath);
@@ -549,6 +642,9 @@ extern "C" void LLVMRustConfigurePassManagerBuilder(
   } else if (PGOSampleUsePath) {
     unwrap(PMBR)->PGOSampleUse = PGOSampleUsePath;
   }
+#else
+  report_fatal_error("Legacy PM not supported with LLVM 15");
+#endif
 }
 
 // Unfortunately, the LLVM C API doesn't provide a way to set the `LibraryInfo`
@@ -753,7 +849,8 @@ LLVMRustOptimizeWithNewPassManager(
     void* LlvmSelfProfiler,
     LLVMRustSelfProfileBeforePassCallback BeforePassCallback,
     LLVMRustSelfProfileAfterPassCallback AfterPassCallback,
-    const char *ExtraPasses, size_t ExtraPassesLen) {
+    const char *ExtraPasses, size_t ExtraPassesLen,
+    const char *LLVMPlugins, size_t LLVMPluginsLen) {
   Module *TheModule = unwrap(ModuleRef);
   TargetMachine *TM = unwrap(TMRef);
   OptimizationLevel OptLevel = fromRust(OptLevelRust);
@@ -889,15 +986,17 @@ LLVMRustOptimizeWithNewPassManager(
       OptimizerLastEPCallbacks.push_back(
         [SanitizerOptions](ModulePassManager &MPM, OptimizationLevel Level) {
           MPM.addPass(RequireAnalysisPass<ASanGlobalsMetadataAnalysis, Module>());
+#if LLVM_VERSION_GE(14, 0)
+          AddressSanitizerOptions opts = AddressSanitizerOptions{
+            /*CompileKernel=*/false,
+            SanitizerOptions->SanitizeAddressRecover,
+            /*UseAfterScope=*/true,
+            AsanDetectStackUseAfterReturnMode::Runtime,
+          };
+          MPM.addPass(ModuleAddressSanitizerPass(opts));
+#else
           MPM.addPass(ModuleAddressSanitizerPass(
               /*CompileKernel=*/false, SanitizerOptions->SanitizeAddressRecover));
-#if LLVM_VERSION_GE(14, 0)
-          AddressSanitizerOptions opts(/*CompileKernel=*/false,
-                                       SanitizerOptions->SanitizeAddressRecover,
-                                       /*UseAfterScope=*/true,
-                                       AsanDetectStackUseAfterReturnMode::Runtime);
-          MPM.addPass(createModuleToFunctionPassAdaptor(AddressSanitizerPass(opts)));
-#else
           MPM.addPass(createModuleToFunctionPassAdaptor(AddressSanitizerPass(
               /*CompileKernel=*/false, SanitizerOptions->SanitizeAddressRecover,
               /*UseAfterScope=*/true)));
@@ -919,6 +1018,20 @@ LLVMRustOptimizeWithNewPassManager(
 #endif
         }
       );
+    }
+  }
+
+  if (LLVMPluginsLen) {
+    auto PluginsStr = StringRef(LLVMPlugins, LLVMPluginsLen);
+    SmallVector<StringRef> Plugins;
+    PluginsStr.split(Plugins, ',', -1, false);
+    for (auto PluginPath: Plugins) {
+      auto Plugin = PassPlugin::Load(PluginPath.str());
+      if (!Plugin) {
+        LLVMRustSetLastError(("Failed to load pass plugin" + PluginPath.str()).c_str());
+        continue;
+      }
+      Plugin->registerPassBuilderCallbacks(PB);
     }
   }
 
@@ -977,6 +1090,13 @@ LLVMRustOptimizeWithNewPassManager(
         break;
       }
     }
+  } else {
+    // We're not building any of the default pipelines but we still want to
+    // add the verifier, instrumentation, etc passes if they were requested
+    for (const auto &C : PipelineStartEPCallbacks)
+      C(MPM, OptLevel);
+    for (const auto &C : OptimizerLastEPCallbacks)
+      C(MPM, OptLevel);
   }
 
   if (ExtraPassesLen) {
@@ -1148,25 +1268,6 @@ extern "C" void LLVMRustRunRestrictionPass(LLVMModuleRef M, char **Symbols,
   passes.add(llvm::createInternalizePass(PreserveFunctions));
 
   passes.run(*unwrap(M));
-}
-
-extern "C" void LLVMRustMarkAllFunctionsNounwind(LLVMModuleRef M) {
-  for (Module::iterator GV = unwrap(M)->begin(), E = unwrap(M)->end(); GV != E;
-       ++GV) {
-    GV->setDoesNotThrow();
-    Function *F = dyn_cast<Function>(GV);
-    if (F == nullptr)
-      continue;
-
-    for (Function::iterator B = F->begin(), BE = F->end(); B != BE; ++B) {
-      for (BasicBlock::iterator I = B->begin(), IE = B->end(); I != IE; ++I) {
-        if (isa<InvokeInst>(I)) {
-          InvokeInst *CI = cast<InvokeInst>(I);
-          CI->setDoesNotThrow();
-        }
-      }
-    }
-  }
 }
 
 extern "C" void

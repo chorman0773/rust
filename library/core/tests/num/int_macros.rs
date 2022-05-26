@@ -1,9 +1,9 @@
 macro_rules! int_module {
-    ($T:ident, $T_i:ident) => {
+    ($T:ident) => {
         #[cfg(test)]
         mod tests {
             use core::ops::{BitAnd, BitOr, BitXor, Not, Shl, Shr};
-            use core::$T_i::*;
+            use core::$T::*;
 
             use crate::num;
 
@@ -294,33 +294,33 @@ macro_rules! int_module {
             fn test_div_floor() {
                 let a: $T = 8;
                 let b = 3;
-                assert_eq!(a.unstable_div_floor(b), 2);
-                assert_eq!(a.unstable_div_floor(-b), -3);
-                assert_eq!((-a).unstable_div_floor(b), -3);
-                assert_eq!((-a).unstable_div_floor(-b), 2);
+                assert_eq!(a.div_floor(b), 2);
+                assert_eq!(a.div_floor(-b), -3);
+                assert_eq!((-a).div_floor(b), -3);
+                assert_eq!((-a).div_floor(-b), 2);
             }
 
             #[test]
             fn test_div_ceil() {
                 let a: $T = 8;
                 let b = 3;
-                assert_eq!(a.unstable_div_ceil(b), 3);
-                assert_eq!(a.unstable_div_ceil(-b), -2);
-                assert_eq!((-a).unstable_div_ceil(b), -2);
-                assert_eq!((-a).unstable_div_ceil(-b), 3);
+                assert_eq!(a.div_ceil(b), 3);
+                assert_eq!(a.div_ceil(-b), -2);
+                assert_eq!((-a).div_ceil(b), -2);
+                assert_eq!((-a).div_ceil(-b), 3);
             }
 
             #[test]
             fn test_next_multiple_of() {
-                assert_eq!((16 as $T).unstable_next_multiple_of(8), 16);
-                assert_eq!((23 as $T).unstable_next_multiple_of(8), 24);
-                assert_eq!((16 as $T).unstable_next_multiple_of(-8), 16);
-                assert_eq!((23 as $T).unstable_next_multiple_of(-8), 16);
-                assert_eq!((-16 as $T).unstable_next_multiple_of(8), -16);
-                assert_eq!((-23 as $T).unstable_next_multiple_of(8), -16);
-                assert_eq!((-16 as $T).unstable_next_multiple_of(-8), -16);
-                assert_eq!((-23 as $T).unstable_next_multiple_of(-8), -24);
-                assert_eq!(MIN.unstable_next_multiple_of(-1), MIN);
+                assert_eq!((16 as $T).next_multiple_of(8), 16);
+                assert_eq!((23 as $T).next_multiple_of(8), 24);
+                assert_eq!((16 as $T).next_multiple_of(-8), 16);
+                assert_eq!((23 as $T).next_multiple_of(-8), 16);
+                assert_eq!((-16 as $T).next_multiple_of(8), -16);
+                assert_eq!((-23 as $T).next_multiple_of(8), -16);
+                assert_eq!((-16 as $T).next_multiple_of(-8), -16);
+                assert_eq!((-23 as $T).next_multiple_of(-8), -24);
+                assert_eq!(MIN.next_multiple_of(-1), MIN);
             }
 
             #[test]

@@ -4,13 +4,7 @@ error[E0277]: the trait bound `E: From<()>` is not satisfied
 LL |     <E as From<_>>::from(never);
    |     ^^^^^^^^^^^^^^^^^^^^ the trait `From<()>` is not implemented for `E`
    |
-   = help: the following implementations were found:
-             <E as From<!>>
-note: required by `from`
-  --> $SRC_DIR/core/src/convert/mod.rs:LL:COL
-   |
-LL |     fn from(_: T) -> Self;
-   |     ^^^^^^^^^^^^^^^^^^^^^^
+   = help: the trait `From<!>` is implemented for `E`
 
 error: aborting due to previous error
 

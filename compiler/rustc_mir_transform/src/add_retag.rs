@@ -34,7 +34,7 @@ fn is_stable(place: PlaceRef<'_>) -> bool {
 }
 
 /// Determine whether this type may be a reference (or box), and thus needs retagging.
-fn may_be_reference(ty: Ty<'tcx>) -> bool {
+fn may_be_reference(ty: Ty<'_>) -> bool {
     match ty.kind() {
         // Primitive types that are not references
         ty::Bool
@@ -57,12 +57,23 @@ fn may_be_reference(ty: Ty<'tcx>) -> bool {
     }
 }
 
-impl<'tcx> MirPass<'tcx> for AddRetag {
-    fn run_pass(&self, tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
-        if !tcx.sess.opts.debugging_opts.mir_emit_retag {
-            return;
-        }
+/// Determines whether or not this LocalDecl is temp, if not it needs retagging.
+fn is_not_temp<'tcx>(local_decl: &LocalDecl<'tcx>) -> bool {
+    if let Some(local_info) = &local_decl.local_info {
+        match local_info.as_ref() {
+            LocalInfo::DerefTemp => return false,
+            _ => (),
+        };
+    }
+    return true;
+}
 
+impl<'tcx> MirPass<'tcx> for AddRetag {
+    fn is_enabled(&self, sess: &rustc_session::Session) -> bool {
+        sess.opts.debugging_opts.mir_emit_retag
+    }
+
+    fn run_pass(&self, tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
         // We need an `AllCallEdges` pass before we can do any work.
         super::add_call_guards::AllCallEdges.run_pass(tcx, body);
 
@@ -71,7 +82,9 @@ impl<'tcx> MirPass<'tcx> for AddRetag {
         let needs_retag = |place: &Place<'tcx>| {
             // FIXME: Instead of giving up for unstable places, we should introduce
             // a temporary and retag on that.
-            is_stable(place.as_ref()) && may_be_reference(place.ty(&*local_decls, tcx).ty)
+            is_stable(place.as_ref())
+                && may_be_reference(place.ty(&*local_decls, tcx).ty)
+                && is_not_temp(&local_decls[place.local])
         };
         let place_base_raw = |place: &Place<'tcx>| {
             // If this is a `Deref`, get the type of what we are deref'ing.
@@ -117,11 +130,11 @@ impl<'tcx> MirPass<'tcx> for AddRetag {
             .iter_mut()
             .filter_map(|block_data| {
                 match block_data.terminator().kind {
-                    TerminatorKind::Call { destination: Some(ref destination), .. }
-                        if needs_retag(&destination.0) =>
+                    TerminatorKind::Call { target: Some(target), destination, .. }
+                        if needs_retag(&destination) =>
                     {
                         // Remember the return destination for later
-                        Some((block_data.terminator().source_info, destination.0, destination.1))
+                        Some((block_data.terminator().source_info, destination, target))
                     }
 
                     // `Drop` is also a call, but it doesn't return anything so we are good.

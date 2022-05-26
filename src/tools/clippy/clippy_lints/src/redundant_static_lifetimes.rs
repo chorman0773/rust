@@ -27,6 +27,7 @@ declare_clippy_lint! {
     ///  const FOO: &[(&str, &str, fn(&Bar) -> bool)] = &[...]
     ///  static FOO: &[(&str, &str, fn(&Bar) -> bool)] = &[...]
     /// ```
+    #[clippy::version = "1.37.0"]
     pub REDUNDANT_STATIC_LIFETIMES,
     style,
     "Using explicit `'static` lifetime for constants or statics when elision rules would allow omitting them."
@@ -98,7 +99,7 @@ impl RedundantStaticLifetimes {
 
 impl EarlyLintPass for RedundantStaticLifetimes {
     fn check_item(&mut self, cx: &EarlyContext<'_>, item: &Item) {
-        if !meets_msrv(self.msrv.as_ref(), &msrvs::STATIC_IN_CONST) {
+        if !meets_msrv(self.msrv, msrvs::STATIC_IN_CONST) {
             return;
         }
 

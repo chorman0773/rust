@@ -12,6 +12,10 @@ trait M {
 }
 
 impl<T: X<Y<i32> = i32>> M for T {}
+//~^ NOTE trait bound `<S as X>::Y<i32> = i32` was not satisfied
+//~| NOTE unsatisfied trait bound introduced here
+//~| NOTE
+//~| NOTE
 
 struct S;
 //~^ NOTE method `f` not found for this
@@ -26,7 +30,6 @@ fn f(a: S) {
     a.f();
     //~^ ERROR the method `f` exists for struct `S`, but its trait bounds were not satisfied
     //~| NOTE method cannot be called on `S` due to unsatisfied trait bounds
-    //~| NOTE the following trait bounds were not satisfied:
 }
 
 fn main() {}

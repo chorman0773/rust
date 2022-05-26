@@ -1,19 +1,18 @@
-use crate::convert::{TryFrom, TryInto};
 use crate::fmt;
 use crate::io::{self, Error, ErrorKind};
 use crate::mem;
 use crate::num::NonZeroI32;
-use crate::os::raw::NonZero_c_int;
 use crate::ptr;
 use crate::sys;
 use crate::sys::cvt;
 use crate::sys::process::process_common::*;
+use core::ffi::NonZero_c_int;
 
 #[cfg(target_os = "linux")]
 use crate::os::linux::process::PidFd;
 
 #[cfg(target_os = "linux")]
-use crate::sys::weak::syscall;
+use crate::sys::weak::raw_syscall;
 
 #[cfg(any(
     target_os = "macos",
@@ -27,7 +26,10 @@ use crate::sys::weak::weak;
 use libc::RTP_ID as pid_t;
 
 #[cfg(not(target_os = "vxworks"))]
-use libc::{c_int, gid_t, pid_t, uid_t};
+use libc::{c_int, pid_t};
+
+#[cfg(not(any(target_os = "vxworks", target_os = "l4re")))]
+use libc::{gid_t, uid_t};
 
 ////////////////////////////////////////////////////////////////////////////////
 // Command
@@ -44,9 +46,9 @@ impl Command {
         let envp = self.capture_env();
 
         if self.saw_nul() {
-            return Err(io::Error::new_const(
+            return Err(io::const_io_error!(
                 ErrorKind::InvalidInput,
-                &"nul byte found in provided data",
+                "nul byte found in provided data",
             ));
         }
 
@@ -120,7 +122,7 @@ impl Command {
                 Err(ref e) if e.kind() == ErrorKind::Interrupted => {}
                 Err(e) => {
                     assert!(p.wait().is_ok(), "wait() should either return Ok or panic");
-                    panic!("the CLOEXEC pipe failed: {:?}", e)
+                    panic!("the CLOEXEC pipe failed: {e:?}")
                 }
                 Ok(..) => {
                     // pipe I/O up to PIPE_BUF bytes should be atomic
@@ -162,9 +164,15 @@ impl Command {
             cgroup: u64,
         }
 
-        syscall! {
+        raw_syscall! {
             fn clone3(cl_args: *mut clone_args, len: libc::size_t) -> libc::c_long
         }
+
+        // Bypassing libc for `clone3` can make further libc calls unsafe,
+        // so we use it sparingly for now. See #89522 for details.
+        // Some tools (e.g. sandboxing tools) may also expect `fork`
+        // rather than `clone3`.
+        let want_clone3_pidfd = self.get_create_pidfd();
 
         // If we fail to create a pidfd for any reason, this will
         // stay as -1, which indicates an error.
@@ -173,14 +181,9 @@ impl Command {
         // Attempt to use the `clone3` syscall, which supports more arguments
         // (in particular, the ability to create a pidfd). If this fails,
         // we will fall through this block to a call to `fork()`
-        if HAS_CLONE3.load(Ordering::Relaxed) {
-            let mut flags = 0;
-            if self.get_create_pidfd() {
-                flags |= CLONE_PIDFD;
-            }
-
+        if want_clone3_pidfd && HAS_CLONE3.load(Ordering::Relaxed) {
             let mut args = clone_args {
-                flags,
+                flags: CLONE_PIDFD,
                 pidfd: &mut pidfd as *mut pid_t as u64,
                 child_tid: 0,
                 parent_tid: 0,
@@ -212,8 +215,8 @@ impl Command {
             }
         }
 
-        // If we get here, the 'clone3' syscall does not exist
-        // or we do not have permission to call it
+        // Generally, we just call `fork`. If we get here after wanting `clone3`,
+        // then the syscall does not exist or we do not have permission to call it.
         cvt(libc::fork()).map(|res| (res, pidfd))
     }
 
@@ -221,10 +224,7 @@ impl Command {
         let envp = self.capture_env();
 
         if self.saw_nul() {
-            return io::Error::new_const(
-                ErrorKind::InvalidInput,
-                &"nul byte found in provided data",
-            );
+            return io::const_io_error!(ErrorKind::InvalidInput, "nul byte found in provided data",);
         }
 
         match self.setup_io(default, true) {
@@ -319,10 +319,15 @@ impl Command {
             cvt(libc::chdir(cwd.as_ptr()))?;
         }
 
+        if let Some(pgroup) = self.get_pgroup() {
+            cvt(libc::setpgid(0, pgroup))?;
+        }
+
         // emscripten has no signal support.
         #[cfg(not(target_os = "emscripten"))]
         {
             use crate::mem::MaybeUninit;
+            use crate::sys::cvt_nz;
             // Reset signal handling so the child process starts in a
             // standardized state. libstd ignores SIGPIPE, and signal-handling
             // libraries often set a mask. Child processes inherit ignored
@@ -332,7 +337,7 @@ impl Command {
             // we're about to run.
             let mut set = MaybeUninit::<libc::sigset_t>::uninit();
             cvt(sigemptyset(set.as_mut_ptr()))?;
-            cvt(libc::pthread_sigmask(libc::SIG_SETMASK, set.as_ptr(), ptr::null_mut()))?;
+            cvt_nz(libc::pthread_sigmask(libc::SIG_SETMASK, set.as_ptr(), ptr::null_mut()))?;
 
             #[cfg(target_os = "android")] // see issue #88585
             {
@@ -458,6 +463,8 @@ impl Command {
             None => None,
         };
 
+        let pgroup = self.get_pgroup();
+
         // Safety: -1 indicates we don't have a pidfd.
         let mut p = unsafe { Process::new(0, -1) };
 
@@ -485,6 +492,8 @@ impl Command {
             let mut attrs = MaybeUninit::uninit();
             cvt_nz(libc::posix_spawnattr_init(attrs.as_mut_ptr()))?;
             let attrs = PosixSpawnattr(&mut attrs);
+
+            let mut flags = 0;
 
             let mut file_actions = MaybeUninit::uninit();
             cvt_nz(libc::posix_spawn_file_actions_init(file_actions.as_mut_ptr()))?;
@@ -515,13 +524,18 @@ impl Command {
                 cvt_nz(f(file_actions.0.as_mut_ptr(), cwd.as_ptr()))?;
             }
 
+            if let Some(pgroup) = pgroup {
+                flags |= libc::POSIX_SPAWN_SETPGROUP;
+                cvt_nz(libc::posix_spawnattr_setpgroup(attrs.0.as_mut_ptr(), pgroup))?;
+            }
+
             let mut set = MaybeUninit::<libc::sigset_t>::uninit();
             cvt(sigemptyset(set.as_mut_ptr()))?;
             cvt_nz(libc::posix_spawnattr_setsigmask(attrs.0.as_mut_ptr(), set.as_ptr()))?;
             cvt(sigaddset(set.as_mut_ptr(), libc::SIGPIPE))?;
             cvt_nz(libc::posix_spawnattr_setsigdefault(attrs.0.as_mut_ptr(), set.as_ptr()))?;
 
-            let flags = libc::POSIX_SPAWN_SETSIGDEF | libc::POSIX_SPAWN_SETSIGMASK;
+            flags |= libc::POSIX_SPAWN_SETSIGDEF | libc::POSIX_SPAWN_SETSIGMASK;
             cvt_nz(libc::posix_spawnattr_setflags(attrs.0.as_mut_ptr(), flags as _))?;
 
             // Make sure we synchronize access to the global `environ` resource
@@ -580,9 +594,9 @@ impl Process {
         // and used for another process, and we probably shouldn't be killing
         // random processes, so just return an error.
         if self.status.is_some() {
-            Err(Error::new_const(
+            Err(io::const_io_error!(
                 ErrorKind::InvalidInput,
-                &"invalid argument: can't kill an exited process",
+                "invalid argument: can't kill an exited process",
             ))
         } else {
             cvt(unsafe { libc::kill(self.pid, libc::SIGKILL) }).map(drop)
@@ -616,6 +630,9 @@ impl Process {
 }
 
 /// Unix exit statuses
+//
+// This is not actually an "exit status" in Unix terminology.  Rather, it is a "wait status".
+// See the discussion in comments and doc comments for `std::process::ExitStatus`.
 #[derive(PartialEq, Eq, Clone, Copy)]
 pub struct ExitStatus(c_int);
 
@@ -647,11 +664,11 @@ impl ExitStatus {
     }
 
     pub fn code(&self) -> Option<i32> {
-        if self.exited() { Some(libc::WEXITSTATUS(self.0)) } else { None }
+        self.exited().then(|| libc::WEXITSTATUS(self.0))
     }
 
     pub fn signal(&self) -> Option<i32> {
-        if libc::WIFSIGNALED(self.0) { Some(libc::WTERMSIG(self.0)) } else { None }
+        libc::WIFSIGNALED(self.0).then(|| libc::WTERMSIG(self.0))
     }
 
     pub fn core_dumped(&self) -> bool {
@@ -659,7 +676,7 @@ impl ExitStatus {
     }
 
     pub fn stopped_signal(&self) -> Option<i32> {
-        if libc::WIFSTOPPED(self.0) { Some(libc::WSTOPSIG(self.0)) } else { None }
+        libc::WIFSTOPPED(self.0).then(|| libc::WSTOPSIG(self.0))
     }
 
     pub fn continued(&self) -> bool {
@@ -681,15 +698,15 @@ impl From<c_int> for ExitStatus {
 impl fmt::Display for ExitStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Some(code) = self.code() {
-            write!(f, "exit status: {}", code)
+            write!(f, "exit status: {code}")
         } else if let Some(signal) = self.signal() {
             if self.core_dumped() {
-                write!(f, "signal: {} (core dumped)", signal)
+                write!(f, "signal: {signal} (core dumped)")
             } else {
-                write!(f, "signal: {}", signal)
+                write!(f, "signal: {signal}")
             }
         } else if let Some(signal) = self.stopped_signal() {
-            write!(f, "stopped (not terminated) by signal: {}", signal)
+            write!(f, "stopped (not terminated) by signal: {signal}")
         } else if self.continued() {
             write!(f, "continued (WIFCONTINUED)")
         } else {

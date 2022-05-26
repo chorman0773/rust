@@ -34,7 +34,7 @@ LL | static VOID2: Void = unsafe { std::mem::transmute(()) };
    = note: uninhabited statics cannot be initialized, and any access would be an immediate error
 
 error: static of uninhabited type
-  --> $DIR/uninhabited-static.rs:14:1
+  --> $DIR/uninhabited-static.rs:16:1
    |
 LL | static NEVER2: Void = unsafe { std::mem::transmute(()) };
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -43,5 +43,41 @@ LL | static NEVER2: Void = unsafe { std::mem::transmute(()) };
    = note: for more information, see issue #74840 <https://github.com/rust-lang/rust/issues/74840>
    = note: uninhabited statics cannot be initialized, and any access would be an immediate error
 
-error: aborting due to 4 previous errors
+error[E0080]: could not evaluate static initializer
+  --> $DIR/uninhabited-static.rs:12:31
+   |
+LL | static VOID2: Void = unsafe { std::mem::transmute(()) };
+   |                               ^^^^^^^^^^^^^^^^^^^^^^^ transmuting to uninhabited type
 
+error[E0080]: could not evaluate static initializer
+  --> $DIR/uninhabited-static.rs:16:32
+   |
+LL | static NEVER2: Void = unsafe { std::mem::transmute(()) };
+   |                                ^^^^^^^^^^^^^^^^^^^^^^^ transmuting to uninhabited type
+
+warning: the type `Void` does not permit zero-initialization
+  --> $DIR/uninhabited-static.rs:12:31
+   |
+LL | static VOID2: Void = unsafe { std::mem::transmute(()) };
+   |                               ^^^^^^^^^^^^^^^^^^^^^^^
+   |                               |
+   |                               this code causes undefined behavior when executed
+   |                               help: use `MaybeUninit<T>` instead, and only call `assume_init` after initialization is done
+   |
+   = note: `#[warn(invalid_value)]` on by default
+   = note: enums with no variants have no valid value
+
+warning: the type `Void` does not permit zero-initialization
+  --> $DIR/uninhabited-static.rs:16:32
+   |
+LL | static NEVER2: Void = unsafe { std::mem::transmute(()) };
+   |                                ^^^^^^^^^^^^^^^^^^^^^^^
+   |                                |
+   |                                this code causes undefined behavior when executed
+   |                                help: use `MaybeUninit<T>` instead, and only call `assume_init` after initialization is done
+   |
+   = note: enums with no variants have no valid value
+
+error: aborting due to 6 previous errors; 2 warnings emitted
+
+For more information about this error, try `rustc --explain E0080`.

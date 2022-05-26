@@ -1,10 +1,8 @@
 #![feature(array_windows)]
-#![feature(bool_to_option)]
-#![feature(crate_visibility_modifier)]
 #![feature(control_flow_enum)]
 #![feature(let_else)]
-#![feature(in_band_lifetimes)]
 #![recursion_limit = "256"]
+#![allow(rustc::potential_query_instability)]
 
 #[macro_use]
 extern crate tracing;

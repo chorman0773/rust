@@ -28,6 +28,7 @@ declare_clippy_lint! {
     /// // Good
     /// let s: String = format!("hello");
     /// ```
+    #[clippy::version = "1.45.0"]
     pub USELESS_CONVERSION,
     complexity,
     "calls to `Into`, `TryInto`, `From`, `TryFrom`, or `IntoIter` which perform useless conversions to the same type"
@@ -40,7 +41,7 @@ pub struct UselessConversion {
 
 impl_lint_pass!(UselessConversion => [USELESS_CONVERSION]);
 
-#[allow(clippy::too_many_lines)]
+#[expect(clippy::too_many_lines)]
 impl<'tcx> LateLintPass<'tcx> for UselessConversion {
     fn check_expr(&mut self, cx: &LateContext<'tcx>, e: &'tcx Expr<'_>) {
         if e.span.from_expansion() {
@@ -63,7 +64,7 @@ impl<'tcx> LateLintPass<'tcx> for UselessConversion {
             },
 
             ExprKind::MethodCall(name, .., args, _) => {
-                if is_trait_method(cx, e, sym::Into) && &*name.ident.as_str() == "into" {
+                if is_trait_method(cx, e, sym::Into) && name.ident.as_str() == "into" {
                     let a = cx.typeck_results().expr_ty(e);
                     let b = cx.typeck_results().expr_ty(&args[0]);
                     if same_type_and_consts(a, b) {

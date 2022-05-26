@@ -1,7 +1,6 @@
 use crate::cmp;
 use crate::fmt;
-use crate::mem;
-use crate::num::NonZeroUsize;
+use crate::mem::{self, ValidAlign};
 use crate::ptr::NonNull;
 
 // While this function is used in one place and its implementation
@@ -31,7 +30,7 @@ const fn size_align<T>() -> (usize, usize) {
 #[lang = "alloc_layout"]
 pub struct Layout {
     // size of the requested block of memory, measured in bytes.
-    size_: usize,
+    size: usize,
 
     // alignment of the requested block of memory, measured in bytes.
     // we ensure that this is always a power-of-two, because API's
@@ -40,7 +39,7 @@ pub struct Layout {
     //
     // (However, we do not analogously require `align >= sizeof(void*)`,
     //  even though that is *also* a requirement of `posix_memalign`.)
-    align_: NonZeroUsize,
+    align: ValidAlign,
 }
 
 impl Layout {
@@ -56,7 +55,7 @@ impl Layout {
     ///    must not overflow (i.e., the rounded value must be less than
     ///    or equal to `usize::MAX`).
     #[stable(feature = "alloc_layout", since = "1.28.0")]
-    #[rustc_const_stable(feature = "const_alloc_layout", since = "1.50.0")]
+    #[rustc_const_stable(feature = "const_alloc_layout_size_align", since = "1.50.0")]
     #[inline]
     pub const fn from_size_align(size: usize, align: usize) -> Result<Self, LayoutError> {
         if !align.is_power_of_two() {
@@ -93,31 +92,31 @@ impl Layout {
     /// This function is unsafe as it does not verify the preconditions from
     /// [`Layout::from_size_align`].
     #[stable(feature = "alloc_layout", since = "1.28.0")]
-    #[rustc_const_stable(feature = "alloc_layout", since = "1.36.0")]
+    #[rustc_const_stable(feature = "const_alloc_layout_unchecked", since = "1.36.0")]
     #[must_use]
     #[inline]
     pub const unsafe fn from_size_align_unchecked(size: usize, align: usize) -> Self {
-        // SAFETY: the caller must ensure that `align` is greater than zero.
-        Layout { size_: size, align_: unsafe { NonZeroUsize::new_unchecked(align) } }
+        // SAFETY: the caller must ensure that `align` is a power of two.
+        Layout { size, align: unsafe { ValidAlign::new_unchecked(align) } }
     }
 
     /// The minimum size in bytes for a memory block of this layout.
     #[stable(feature = "alloc_layout", since = "1.28.0")]
-    #[rustc_const_stable(feature = "const_alloc_layout", since = "1.50.0")]
+    #[rustc_const_stable(feature = "const_alloc_layout_size_align", since = "1.50.0")]
     #[must_use]
     #[inline]
     pub const fn size(&self) -> usize {
-        self.size_
+        self.size
     }
 
     /// The minimum byte alignment for a memory block of this layout.
     #[stable(feature = "alloc_layout", since = "1.28.0")]
-    #[rustc_const_stable(feature = "const_alloc_layout", since = "1.50.0")]
+    #[rustc_const_stable(feature = "const_alloc_layout_size_align", since = "1.50.0")]
     #[must_use = "this returns the minimum alignment, \
                   without modifying the layout"]
     #[inline]
     pub const fn align(&self) -> usize {
-        self.align_.get()
+        self.align.as_nonzero().get()
     }
 
     /// Constructs a `Layout` suitable for holding a value of type `T`.
@@ -157,11 +156,11 @@ impl Layout {
     ///
     /// - If `T` is `Sized`, this function is always safe to call.
     /// - If the unsized tail of `T` is:
-    ///     - a [slice], then the length of the slice tail must be an intialized
+    ///     - a [slice], then the length of the slice tail must be an initialized
     ///       integer, and the size of the *entire value*
     ///       (dynamic tail length + statically sized prefix) must fit in `isize`.
     ///     - a [trait object], then the vtable part of the pointer must point
-    ///       to a valid vtable for the type `T` acquired by an unsizing coersion,
+    ///       to a valid vtable for the type `T` acquired by an unsizing coercion,
     ///       and the size of the *entire value*
     ///       (dynamic tail length + statically sized prefix) must fit in `isize`.
     ///     - an (unstable) [extern type], then this function is always safe to
@@ -194,7 +193,7 @@ impl Layout {
     #[inline]
     pub const fn dangling(&self) -> NonNull<u8> {
         // SAFETY: align is guaranteed to be non-zero
-        unsafe { NonNull::new_unchecked(self.align() as *mut u8) }
+        unsafe { NonNull::new_unchecked(crate::ptr::invalid_mut::<u8>(self.align())) }
     }
 
     /// Creates a layout describing the record that can hold a value
@@ -281,7 +280,9 @@ impl Layout {
         // > `usize::MAX`)
         let new_size = self.size() + pad;
 
-        Layout::from_size_align(new_size, self.align()).unwrap()
+        // SAFETY: self.align is already known to be valid and new_size has been
+        // padded already.
+        unsafe { Layout::from_size_align_unchecked(new_size, self.align()) }
     }
 
     /// Creates a layout describing the record for `n` instances of
@@ -403,16 +404,24 @@ impl Layout {
     #[stable(feature = "alloc_layout_manipulation", since = "1.44.0")]
     #[inline]
     pub fn array<T>(n: usize) -> Result<Self, LayoutError> {
-        let (layout, offset) = Layout::new::<T>().repeat(n)?;
-        debug_assert_eq!(offset, mem::size_of::<T>());
-        Ok(layout.pad_to_align())
+        let array_size = mem::size_of::<T>().checked_mul(n).ok_or(LayoutError)?;
+
+        // SAFETY:
+        // - Size: `array_size` cannot be too big because `size_of::<T>()` must
+        //   be a multiple of `align_of::<T>()`. Therefore, `array_size`
+        //   rounded up to the nearest multiple of `align_of::<T>()` is just
+        //   `array_size`. And `array_size` cannot be too big because it was
+        //   just checked by the `checked_mul()`.
+        // - Alignment: `align_of::<T>()` will always give an acceptable
+        //   (non-zero, power of two) alignment.
+        Ok(unsafe { Layout::from_size_align_unchecked(array_size, mem::align_of::<T>()) })
     }
 }
 
 #[stable(feature = "alloc_layout", since = "1.28.0")]
-#[rustc_deprecated(
+#[deprecated(
     since = "1.52.0",
-    reason = "Name does not follow std convention, use LayoutError",
+    note = "Name does not follow std convention, use LayoutError",
     suggestion = "LayoutError"
 )]
 pub type LayoutErr = LayoutError;

@@ -31,6 +31,7 @@ declare_clippy_lint! {
     /// # let y = 2;
     /// if x <= y {}
     /// ```
+    #[clippy::version = "pre 1.29.0"]
     pub DOUBLE_COMPARISONS,
     complexity,
     "unnecessary double comparisons that can be simplified"
@@ -39,7 +40,7 @@ declare_clippy_lint! {
 declare_lint_pass!(DoubleComparisons => [DOUBLE_COMPARISONS]);
 
 impl<'tcx> DoubleComparisons {
-    #[allow(clippy::similar_names)]
+    #[expect(clippy::similar_names)]
     fn check_binop(cx: &LateContext<'tcx>, op: BinOpKind, lhs: &'tcx Expr<'_>, rhs: &'tcx Expr<'_>, span: Span) {
         let (lkind, llhs, lrhs, rkind, rlhs, rrhs) = match (&lhs.kind, &rhs.kind) {
             (ExprKind::Binary(lb, llhs, lrhs), ExprKind::Binary(rb, rlhs, rrhs)) => {

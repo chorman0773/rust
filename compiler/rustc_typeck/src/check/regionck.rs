@@ -75,12 +75,11 @@
 use crate::check::dropck;
 use crate::check::FnCtxt;
 use crate::mem_categorization as mc;
-use crate::middle::region;
 use crate::outlives::outlives_bounds::InferCtxtExt as _;
 use rustc_data_structures::stable_set::FxHashSet;
 use rustc_hir as hir;
 use rustc_hir::def_id::LocalDefId;
-use rustc_hir::intravisit::{self, NestedVisitorMap, Visitor};
+use rustc_hir::intravisit::{self, Visitor};
 use rustc_hir::PatKind;
 use rustc_infer::infer::outlives::env::OutlivesEnvironment;
 use rustc_infer::infer::{self, InferCtxt, RegionObligation, RegionckMode};
@@ -106,7 +105,7 @@ macro_rules! ignore_err {
 pub(crate) trait OutlivesEnvironmentExt<'tcx> {
     fn add_implied_bounds(
         &mut self,
-        infcx: &InferCtxt<'a, 'tcx>,
+        infcx: &InferCtxt<'_, 'tcx>,
         fn_sig_tys: FxHashSet<Ty<'tcx>>,
         body_id: hir::HirId,
         span: Span,
@@ -130,7 +129,7 @@ impl<'tcx> OutlivesEnvironmentExt<'tcx> for OutlivesEnvironment<'tcx> {
     /// add those assumptions into the outlives-environment.
     ///
     /// Tests: `src/test/ui/regions/regions-free-region-ordering-*.rs`
-    fn add_implied_bounds(
+    fn add_implied_bounds<'a>(
         &mut self,
         infcx: &InferCtxt<'a, 'tcx>,
         fn_sig_tys: FxHashSet<Ty<'tcx>>,
@@ -171,8 +170,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
     /// Region checking during the WF phase for items. `wf_tys` are the
     /// types from which we should derive implied bounds, if any.
+    #[instrument(level = "debug", skip(self))]
     pub fn regionck_item(&self, item_id: hir::HirId, span: Span, wf_tys: FxHashSet<Ty<'tcx>>) {
-        debug!("regionck_item(item.id={:?}, wf_tys={:?})", item_id, wf_tys);
         let subject = self.tcx.hir().local_def_id(item_id);
         let mut rcx = RegionCtxt::new(self, item_id, Subject(subject), self.param_env);
         rcx.outlives_environment.add_implied_bounds(self, wf_tys, item_id, span);
@@ -219,8 +218,6 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 pub struct RegionCtxt<'a, 'tcx> {
     pub fcx: &'a FnCtxt<'a, 'tcx>,
 
-    pub region_scope_tree: &'tcx region::ScopeTree,
-
     outlives_environment: OutlivesEnvironment<'tcx>,
 
     // id of innermost fn body id
@@ -247,11 +244,9 @@ impl<'a, 'tcx> RegionCtxt<'a, 'tcx> {
         Subject(subject): Subject,
         param_env: ty::ParamEnv<'tcx>,
     ) -> RegionCtxt<'a, 'tcx> {
-        let region_scope_tree = fcx.tcx.region_scope_tree(subject);
         let outlives_environment = OutlivesEnvironment::new(param_env);
         RegionCtxt {
             fcx,
-            region_scope_tree,
             body_id: initial_body_id,
             body_owner: subject,
             subject_def_id: subject,
@@ -269,7 +264,7 @@ impl<'a, 'tcx> RegionCtxt<'a, 'tcx> {
     ///
     /// Consider this silly example:
     ///
-    /// ```
+    /// ```ignore UNSOLVED (does replacing @i32 with Box<i32> preserve the desired semantics for the example?)
     /// fn borrow(x: &i32) -> &i32 {x}
     /// fn foo(x: @i32) -> i32 {  // block: B
     ///     let b = borrow(x);    // region: <R0>
@@ -317,13 +312,8 @@ impl<'a, 'tcx> RegionCtxt<'a, 'tcx> {
         self.body_id = body_id.hir_id;
         self.body_owner = self.tcx.hir().body_owner_def_id(body_id);
 
-        let fn_sig = {
-            match self.typeck_results.borrow().liberated_fn_sigs().get(id) {
-                Some(f) => *f,
-                None => {
-                    bug!("No fn-sig entry for id={:?}", id);
-                }
-            }
+        let Some(fn_sig) = self.typeck_results.borrow().liberated_fn_sigs().get(id) else {
+            bug!("No fn-sig entry for id={:?}", id);
         };
 
         // Collect the types from which we create inferred bounds.
@@ -339,6 +329,29 @@ impl<'a, 'tcx> RegionCtxt<'a, 'tcx> {
         self.link_fn_params(body.params);
         self.visit_body(body);
         self.visit_region_obligations(body_id.hir_id);
+    }
+
+    fn visit_inline_const(&mut self, id: hir::HirId, body: &'tcx hir::Body<'tcx>) {
+        debug!("visit_inline_const(id={:?})", id);
+
+        // Save state of current function. We will restore afterwards.
+        let old_body_id = self.body_id;
+        let old_body_owner = self.body_owner;
+        let env_snapshot = self.outlives_environment.push_snapshot_pre_typeck_child();
+
+        let body_id = body.id();
+        self.body_id = body_id.hir_id;
+        self.body_owner = self.tcx.hir().body_owner_def_id(body_id);
+
+        self.outlives_environment.save_implied_bounds(body_id.hir_id);
+
+        self.visit_body(body);
+        self.visit_region_obligations(body_id.hir_id);
+
+        // Restore state from previous function.
+        self.outlives_environment.pop_snapshot_post_typeck_child(env_snapshot);
+        self.body_id = old_body_id;
+        self.body_owner = old_body_owner;
     }
 
     fn visit_region_obligations(&mut self, hir_id: hir::HirId) {
@@ -383,12 +396,6 @@ impl<'a, 'tcx> Visitor<'tcx> for RegionCtxt<'a, 'tcx> {
     // hierarchy, and in particular the relationships between free
     // regions, until regionck, as described in #3238.
 
-    type Map = intravisit::ErasedMap<'tcx>;
-
-    fn nested_visit_map(&mut self) -> NestedVisitorMap<Self::Map> {
-        NestedVisitorMap::None
-    }
-
     fn visit_fn(
         &mut self,
         fk: intravisit::FnKind<'tcx>,
@@ -406,13 +413,13 @@ impl<'a, 'tcx> Visitor<'tcx> for RegionCtxt<'a, 'tcx> {
         // `visit_fn_body`.  We will restore afterwards.
         let old_body_id = self.body_id;
         let old_body_owner = self.body_owner;
-        let env_snapshot = self.outlives_environment.push_snapshot_pre_closure();
+        let env_snapshot = self.outlives_environment.push_snapshot_pre_typeck_child();
 
         let body = self.tcx.hir().body(body_id);
         self.visit_fn_body(hir_id, body, span);
 
         // Restore state from previous function.
-        self.outlives_environment.pop_snapshot_post_closure(env_snapshot);
+        self.outlives_environment.pop_snapshot_post_typeck_child(env_snapshot);
         self.body_id = old_body_id;
         self.body_owner = old_body_owner;
     }
@@ -458,6 +465,11 @@ impl<'a, 'tcx> Visitor<'tcx> for RegionCtxt<'a, 'tcx> {
                 self.link_match(discr, arms);
 
                 intravisit::walk_expr(self, expr);
+            }
+
+            hir::ExprKind::ConstBlock(anon_const) => {
+                let body = self.tcx.hir().body(anon_const.body);
+                self.visit_inline_const(anon_const.hir_id, body);
             }
 
             _ => intravisit::walk_expr(self, expr),
@@ -620,12 +632,9 @@ impl<'a, 'tcx> RegionCtxt<'a, 'tcx> {
         ignore_err!(self.with_mc(|mc| {
             mc.cat_pattern(discr_cmt, root_pat, |sub_cmt, hir::Pat { kind, span, hir_id, .. }| {
                 // `ref x` pattern
-                if let PatKind::Binding(..) = kind {
-                    if let Some(ty::BindByReference(mutbl)) =
-                        mc.typeck_results.extract_binding_mode(self.tcx.sess, *hir_id, *span)
-                    {
-                        self.link_region_from_node_type(*span, *hir_id, mutbl, sub_cmt);
-                    }
+                if let PatKind::Binding(..) = kind
+                    && let Some(ty::BindByReference(mutbl)) = mc.typeck_results.extract_binding_mode(self.tcx.sess, *hir_id, *span) {
+                    self.link_region_from_node_type(*span, *hir_id, mutbl, sub_cmt);
                 }
             })
         }));
@@ -667,7 +676,7 @@ impl<'a, 'tcx> RegionCtxt<'a, 'tcx> {
         let rptr_ty = self.resolve_node_type(id);
         if let ty::Ref(r, _, _) = rptr_ty.kind() {
             debug!("rptr_ty={}", rptr_ty);
-            self.link_region(span, r, ty::BorrowKind::from_mutbl(mutbl), cmt_borrowed);
+            self.link_region(span, *r, ty::BorrowKind::from_mutbl(mutbl), cmt_borrowed);
         }
     }
 
@@ -831,15 +840,15 @@ impl<'a, 'tcx> RegionCtxt<'a, 'tcx> {
                     self.sub_regions(
                         infer::ReborrowUpvar(span, upvar_id),
                         borrow_region,
-                        upvar_borrow.region,
+                        captured_place.region.unwrap(),
                     );
-                    if let ty::ImmBorrow = upvar_borrow.kind {
+                    if let ty::ImmBorrow = upvar_borrow {
                         debug!("link_upvar_region: capture by shared ref");
                     } else {
                         all_captures_are_imm_borrow = false;
                     }
                 }
-                ty::UpvarCapture::ByValue(_) => {
+                ty::UpvarCapture::ByValue => {
                     all_captures_are_imm_borrow = false;
                 }
             }

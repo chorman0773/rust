@@ -28,6 +28,7 @@ declare_clippy_lint! {
     /// ```rust
     /// fn return_unit() {}
     /// ```
+    #[clippy::version = "1.31.0"]
     pub UNUSED_UNIT,
     style,
     "needless unit expression"
@@ -93,7 +94,7 @@ impl EarlyLintPass for UnusedUnit {
 
         if_chain! {
             if segments.len() == 1;
-            if ["Fn", "FnMut", "FnOnce"].contains(&&*segments[0].ident.name.as_str());
+            if ["Fn", "FnMut", "FnOnce"].contains(&segments[0].ident.name.as_str());
             if let Some(args) = &segments[0].args;
             if let ast::GenericArgs::Parenthesized(generic_args) = &**args;
             if let ast::FnRetTy::Ty(ty) = &generic_args.output;
@@ -129,7 +130,7 @@ fn lint_unneeded_unit_return(cx: &EarlyContext<'_>, ty: &ast::Ty, span: Span) {
         snippet_opt(cx, span.with_hi(ty.span.hi())).map_or((ty.span, Applicability::MaybeIncorrect), |fn_source| {
             position_before_rarrow(&fn_source).map_or((ty.span, Applicability::MaybeIncorrect), |rpos| {
                 (
-                    #[allow(clippy::cast_possible_truncation)]
+                    #[expect(clippy::cast_possible_truncation)]
                     ty.span.with_lo(BytePos(span.lo().0 + rpos as u32)),
                     Applicability::MachineApplicable,
                 )

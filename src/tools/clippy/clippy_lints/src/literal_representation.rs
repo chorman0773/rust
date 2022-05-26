@@ -2,15 +2,12 @@
 //! floating-point literal expressions.
 
 use clippy_utils::diagnostics::span_lint_and_sugg;
+use clippy_utils::numeric_literal::{NumericLiteral, Radix};
 use clippy_utils::source::snippet_opt;
-use clippy_utils::{
-    in_macro,
-    numeric_literal::{NumericLiteral, Radix},
-};
 use if_chain::if_chain;
 use rustc_ast::ast::{Expr, ExprKind, Lit, LitKind};
 use rustc_errors::Applicability;
-use rustc_lint::{EarlyContext, EarlyLintPass};
+use rustc_lint::{EarlyContext, EarlyLintPass, LintContext};
 use rustc_middle::lint::in_external_macro;
 use rustc_session::{declare_tool_lint, impl_lint_pass};
 use std::iter;
@@ -31,6 +28,7 @@ declare_clippy_lint! {
     /// // Good
     /// let x: u64 = 61_864_918_973_511;
     /// ```
+    #[clippy::version = "pre 1.29.0"]
     pub UNREADABLE_LITERAL,
     pedantic,
     "long literal without underscores"
@@ -44,18 +42,14 @@ declare_clippy_lint! {
     /// This is most probably a typo
     ///
     /// ### Known problems
-    /// - Recommends a signed suffix, even though the number might be too big and an unsigned
-    ///   suffix is required
+    /// - Does not match on integers too large to fit in the corresponding unsigned type
     /// - Does not match on `_127` since that is a valid grouping for decimal and octal numbers
     ///
     /// ### Example
-    /// ```rust
-    /// // Probably mistyped
-    /// 2_32;
-    ///
-    /// // Good
-    /// 2_i32;
+    /// `2_32` => `2_i32`
+    /// `250_8 => `250_u8`
     /// ```
+    #[clippy::version = "1.30.0"]
     pub MISTYPED_LITERAL_SUFFIXES,
     correctness,
     "mistyped literal suffix"
@@ -78,6 +72,7 @@ declare_clippy_lint! {
     /// // Good
     /// let x: u64 = 61_864_918_973_511;
     /// ```
+    #[clippy::version = "pre 1.29.0"]
     pub INCONSISTENT_DIGIT_GROUPING,
     style,
     "integer literals with digits grouped inconsistently"
@@ -96,6 +91,7 @@ declare_clippy_lint! {
     /// let x: u32 = 0xFFF_FFF;
     /// let y: u8 = 0b01_011_101;
     /// ```
+    #[clippy::version = "1.49.0"]
     pub UNUSUAL_BYTE_GROUPINGS,
     style,
     "binary or hex literals that aren't grouped by four"
@@ -114,6 +110,7 @@ declare_clippy_lint! {
     /// ```rust
     /// let x: u64 = 6186491_8973511;
     /// ```
+    #[clippy::version = "pre 1.29.0"]
     pub LARGE_DIGIT_GROUPS,
     pedantic,
     "grouping digits into groups that are too large"
@@ -131,6 +128,7 @@ declare_clippy_lint! {
     /// `255` => `0xFF`
     /// `65_535` => `0xFFFF`
     /// `4_042_322_160` => `0xF0F0_F0F0`
+    #[clippy::version = "pre 1.29.0"]
     pub DECIMAL_LITERAL_REPRESENTATION,
     restriction,
     "using decimal representation when hexadecimal would be better"
@@ -206,7 +204,6 @@ impl WarningType {
     }
 }
 
-#[allow(clippy::module_name_repetitions)]
 #[derive(Copy, Clone)]
 pub struct LiteralDigitGrouping {
     lint_fraction_readability: bool,
@@ -222,7 +219,7 @@ impl_lint_pass!(LiteralDigitGrouping => [
 
 impl EarlyLintPass for LiteralDigitGrouping {
     fn check_expr(&mut self, cx: &EarlyContext<'_>, expr: &Expr) {
-        if in_external_macro(cx.sess, expr.span) {
+        if in_external_macro(cx.sess(), expr.span) {
             return;
         }
 
@@ -283,7 +280,7 @@ impl LiteralDigitGrouping {
                         | WarningType::InconsistentDigitGrouping
                         | WarningType::UnusualByteGroupings
                         | WarningType::LargeDigitGroups => {
-                            !in_macro(lit.span)
+                            !lit.span.from_expansion()
                         }
                         WarningType::DecimalRepresentation | WarningType::MistypedLiteralSuffix => {
                             true
@@ -307,18 +304,47 @@ impl LiteralDigitGrouping {
             return true;
         }
 
-        let (part, mistyped_suffixes, missing_char) = if let Some((_, exponent)) = &mut num_lit.exponent {
-            (exponent, &["32", "64"][..], 'f')
+        let (part, mistyped_suffixes, is_float) = if let Some((_, exponent)) = &mut num_lit.exponent {
+            (exponent, &["32", "64"][..], true)
         } else if num_lit.fraction.is_some() {
-            (&mut num_lit.integer, &["32", "64"][..], 'f')
+            return true;
         } else {
-            (&mut num_lit.integer, &["8", "16", "32", "64"][..], 'i')
+            (&mut num_lit.integer, &["8", "16", "32", "64"][..], false)
         };
 
         let mut split = part.rsplit('_');
         let last_group = split.next().expect("At least one group");
         if split.next().is_some() && mistyped_suffixes.contains(&last_group) {
-            *part = &part[..part.len() - last_group.len()];
+            let main_part = &part[..part.len() - last_group.len()];
+            let missing_char;
+            if is_float {
+                missing_char = 'f';
+            } else {
+                let radix = match num_lit.radix {
+                    Radix::Binary => 2,
+                    Radix::Octal => 8,
+                    Radix::Decimal => 10,
+                    Radix::Hexadecimal => 16,
+                };
+                if let Ok(int) = u64::from_str_radix(&main_part.replace('_', ""), radix) {
+                    missing_char = match (last_group, int) {
+                        ("8", i) if i8::try_from(i).is_ok() => 'i',
+                        ("16", i) if i16::try_from(i).is_ok() => 'i',
+                        ("32", i) if i32::try_from(i).is_ok() => 'i',
+                        ("64", i) if i64::try_from(i).is_ok() => 'i',
+                        ("8", u) if u8::try_from(u).is_ok() => 'u',
+                        ("16", u) if u16::try_from(u).is_ok() => 'u',
+                        ("32", u) if u32::try_from(u).is_ok() => 'u',
+                        ("64", _) => 'u',
+                        _ => {
+                            return true;
+                        },
+                    }
+                } else {
+                    return true;
+                }
+            }
+            *part = main_part;
             let mut sugg = num_lit.format();
             sugg.push('_');
             sugg.push(missing_char);
@@ -405,7 +431,7 @@ impl LiteralDigitGrouping {
     }
 }
 
-#[allow(clippy::module_name_repetitions)]
+#[expect(clippy::module_name_repetitions)]
 #[derive(Copy, Clone)]
 pub struct DecimalLiteralRepresentation {
     threshold: u64,
@@ -415,7 +441,7 @@ impl_lint_pass!(DecimalLiteralRepresentation => [DECIMAL_LITERAL_REPRESENTATION]
 
 impl EarlyLintPass for DecimalLiteralRepresentation {
     fn check_expr(&mut self, cx: &EarlyContext<'_>, expr: &Expr) {
-        if in_external_macro(cx.sess, expr.span) {
+        if in_external_macro(cx.sess(), expr.span) {
             return;
         }
 

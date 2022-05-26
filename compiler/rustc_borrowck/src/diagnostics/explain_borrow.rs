@@ -3,7 +3,7 @@
 use std::collections::VecDeque;
 
 use rustc_data_structures::fx::FxHashSet;
-use rustc_errors::{Applicability, DiagnosticBuilder};
+use rustc_errors::{Applicability, Diagnostic};
 use rustc_index::vec::IndexVec;
 use rustc_infer::infer::NllRegionVariableOrigin;
 use rustc_middle::mir::{
@@ -13,7 +13,7 @@ use rustc_middle::mir::{
 use rustc_middle::ty::adjustment::PointerCast;
 use rustc_middle::ty::{self, RegionVid, TyCtxt};
 use rustc_span::symbol::Symbol;
-use rustc_span::Span;
+use rustc_span::{sym, DesugaringKind, Span};
 
 use crate::region_infer::BlameConstraint;
 use crate::{
@@ -60,7 +60,7 @@ impl BorrowExplanation {
         tcx: TyCtxt<'tcx>,
         body: &Body<'tcx>,
         local_names: &IndexVec<Local, Option<Symbol>>,
-        err: &mut DiagnosticBuilder<'_>,
+        err: &mut Diagnostic,
         borrow_desc: &str,
         borrow_span: Option<Span>,
         multiple_borrow_span: Option<(Span, Span)>,
@@ -135,11 +135,20 @@ impl BorrowExplanation {
                 should_note_order,
             } => {
                 let local_decl = &body.local_decls[dropped_local];
-                let (dtor_desc, type_desc) = match local_decl.ty.kind() {
+                let mut ty = local_decl.ty;
+                if local_decl.source_info.span.desugaring_kind() == Some(DesugaringKind::ForLoop) {
+                    if let ty::Adt(adt, substs) = local_decl.ty.kind() {
+                        if tcx.is_diagnostic_item(sym::Option, adt.did()) {
+                            // in for loop desugaring, only look at the `Some(..)` inner type
+                            ty = substs.type_at(0);
+                        }
+                    }
+                }
+                let (dtor_desc, type_desc) = match ty.kind() {
                     // If type is an ADT that implements Drop, then
                     // simplify output by reporting just the ADT name.
                     ty::Adt(adt, _substs) if adt.has_dtor(tcx) && !adt.is_box() => {
-                        ("`Drop` code", format!("type `{}`", tcx.def_path_str(adt.did)))
+                        ("`Drop` code", format!("type `{}`", tcx.def_path_str(adt.did())))
                     }
 
                     // Otherwise, just report the whole type (and use
@@ -266,7 +275,7 @@ impl BorrowExplanation {
     }
     pub(crate) fn add_lifetime_bound_suggestion_to_diagnostic(
         &self,
-        err: &mut DiagnosticBuilder<'_>,
+        err: &mut Diagnostic,
         category: &ConstraintCategory,
         span: Span,
         region_name: &RegionName,
@@ -366,15 +375,12 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
 
             Some(Cause::DropVar(local, location)) => {
                 let mut should_note_order = false;
-                if self.local_names[local].is_some() {
-                    if let Some((WriteKind::StorageDeadOrDrop, place)) = kind_place {
-                        if let Some(borrowed_local) = place.as_local() {
-                            if self.local_names[borrowed_local].is_some() && local != borrowed_local
-                            {
-                                should_note_order = true;
-                            }
-                        }
-                    }
+                if self.local_names[local].is_some()
+                    && let Some((WriteKind::StorageDeadOrDrop, place)) = kind_place
+                    && let Some(borrowed_local) = place.as_local()
+                    && self.local_names[borrowed_local].is_some() && local != borrowed_local
+                {
+                    should_note_order = true;
                 }
 
                 BorrowExplanation::UsedLaterWhenDropped {
@@ -461,7 +467,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                     block
                         .terminator()
                         .successors()
-                        .map(|bb| Location { statement_index: 0, block: *bb })
+                        .map(|bb| Location { statement_index: 0, block: bb })
                         .filter(|s| visited_locations.insert(*s))
                         .map(|s| {
                             if self.is_back_edge(location, s) {
@@ -520,7 +526,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                 }
             } else {
                 for bb in block.terminator().successors() {
-                    let successor = Location { statement_index: 0, block: *bb };
+                    let successor = Location { statement_index: 0, block: bb };
 
                     if !visited_locations.contains(&successor)
                         && self.find_loop_head_dfs(successor, loop_head, visited_locations)
@@ -641,13 +647,10 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
 
                 // The only kind of statement that we care about is assignments...
                 if let StatementKind::Assign(box (place, rvalue)) = &stmt.kind {
-                    let into = match place.local_or_deref_local() {
-                        Some(into) => into,
-                        None => {
-                            // Continue at the next location.
-                            queue.push(current_location.successor_within_block());
-                            continue;
-                        }
+                    let Some(into) = place.local_or_deref_local() else {
+                        // Continue at the next location.
+                        queue.push(current_location.successor_within_block());
+                        continue;
                     };
 
                     match rvalue {
@@ -702,10 +705,10 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                 let terminator = block.terminator();
                 debug!("was_captured_by_trait_object: terminator={:?}", terminator);
 
-                if let TerminatorKind::Call { destination: Some((place, block)), args, .. } =
+                if let TerminatorKind::Call { destination, target: Some(block), args, .. } =
                     &terminator.kind
                 {
-                    if let Some(dest) = place.as_local() {
+                    if let Some(dest) = destination.as_local() {
                         debug!(
                             "was_captured_by_trait_object: target={:?} dest={:?} args={:?}",
                             target, dest, args

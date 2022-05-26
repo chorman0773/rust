@@ -7,8 +7,27 @@ use rustc_errors::Applicability;
 use rustc_hir::{Expr, ExprKind};
 use rustc_lint::{LateContext, LintContext};
 use rustc_span::hygiene;
+use rustc_span::source_map::SourceMap;
 use rustc_span::{BytePos, Pos, Span, SyntaxContext};
 use std::borrow::Cow;
+
+/// Checks if the span starts with the given text. This will return false if the span crosses
+/// multiple files or if source is not available.
+///
+/// This is used to check for proc macros giving unhelpful spans to things.
+pub fn span_starts_with<T: LintContext>(cx: &T, span: Span, text: &str) -> bool {
+    fn helper(sm: &SourceMap, span: Span, text: &str) -> bool {
+        let pos = sm.lookup_byte_offset(span.lo());
+        let Some(ref src) = pos.sf.src else {
+            return false;
+        };
+        let end = span.hi() - pos.sf.start_pos;
+        src.get(pos.pos.0 as usize..end.0 as usize)
+            // Expression spans can include wrapping parenthesis. Remove them first.
+            .map_or(false, |s| s.trim_start_matches('(').starts_with(text))
+    }
+    helper(cx.sess().source_map(), span, text)
+}
 
 /// Like `snippet_block`, but add braces if the expr is not an `ExprKind::Block`.
 /// Also takes an `Option<String>` which can be put inside the braces.
@@ -89,7 +108,7 @@ pub fn is_present_in_source<T: LintContext>(cx: &T, span: Span) -> bool {
     true
 }
 
-/// Returns the positon just before rarrow
+/// Returns the position just before rarrow
 ///
 /// ```rust,ignore
 /// fn into(self) -> () {}
@@ -118,7 +137,7 @@ pub fn position_before_rarrow(s: &str) -> Option<usize> {
 }
 
 /// Reindent a multiline string with possibility of ignoring the first line.
-#[allow(clippy::needless_pass_by_value)]
+#[expect(clippy::needless_pass_by_value)]
 pub fn reindent_multiline(s: Cow<'_, str>, ignore_first: bool, indent: Option<usize>) -> Cow<'_, str> {
     let s_space = reindent_multiline_inner(&s, ignore_first, indent, ' ');
     let s_tab = reindent_multiline_inner(&s_space, ignore_first, indent, '\t');
@@ -128,7 +147,7 @@ pub fn reindent_multiline(s: Cow<'_, str>, ignore_first: bool, indent: Option<us
 fn reindent_multiline_inner(s: &str, ignore_first: bool, indent: Option<usize>, ch: char) -> String {
     let x = s
         .lines()
-        .skip(ignore_first as usize)
+        .skip(usize::from(ignore_first))
         .filter_map(|l| {
             if l.is_empty() {
                 None
@@ -155,14 +174,22 @@ fn reindent_multiline_inner(s: &str, ignore_first: bool, indent: Option<usize>, 
         .join("\n")
 }
 
-/// Converts a span to a code snippet if available, otherwise use default.
+/// Converts a span to a code snippet if available, otherwise returns the default.
 ///
 /// This is useful if you want to provide suggestions for your lint or more generally, if you want
-/// to convert a given `Span` to a `str`.
+/// to convert a given `Span` to a `str`. To create suggestions consider using
+/// [`snippet_with_applicability`] to ensure that the applicability stays correct.
 ///
 /// # Example
 /// ```rust,ignore
-/// snippet(cx, expr.span, "..")
+/// // Given two spans one for `value` and one for the `init` expression.
+/// let value = Vec::new();
+/// //  ^^^^^   ^^^^^^^^^^
+/// //  span1   span2
+///
+/// // The snipped call would return the corresponding code snippet
+/// snippet(cx, span1, "..") // -> "value"
+/// snippet(cx, span2, "..") // -> "Vec::new()"
 /// ```
 pub fn snippet<'a, T: LintContext>(cx: &T, span: Span, default: &'a str) -> Cow<'a, str> {
     snippet_opt(cx, span).map_or_else(|| Cow::Borrowed(default), From::from)
@@ -273,7 +300,7 @@ pub fn snippet_block_with_applicability<'a, T: LintContext>(
 /// correctly get a snippet of `vec![]`.
 ///
 /// This will also return whether or not the snippet is a macro call.
-pub fn snippet_with_context(
+pub fn snippet_with_context<'a>(
     cx: &LateContext<'_>,
     span: Span,
     outer: SyntaxContext,

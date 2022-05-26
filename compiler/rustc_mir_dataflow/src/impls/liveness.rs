@@ -2,7 +2,7 @@ use rustc_index::bit_set::BitSet;
 use rustc_middle::mir::visit::{MutatingUseContext, NonMutatingUseContext, PlaceContext, Visitor};
 use rustc_middle::mir::{self, Local, Location};
 
-use crate::{AnalysisDomain, Backward, GenKill, GenKillAnalysis};
+use crate::{AnalysisDomain, Backward, CallReturnPlaces, GenKill, GenKillAnalysis};
 
 /// A [live-variable dataflow analysis][liveness].
 ///
@@ -18,42 +18,18 @@ use crate::{AnalysisDomain, Backward, GenKill, GenKillAnalysis};
 /// such an assignment is currently marked as a "use" of `x` in an attempt to be maximally
 /// conservative.
 ///
-/// ## Enums and `SetDiscriminant`
-///
-/// Assigning a literal value to an `enum` (e.g. `Option<i32>`), does not result in a simple
-/// assignment of the form `_1 = /*...*/` in the MIR. For example, the following assignment to `x`:
-///
-/// ```
-/// x = Some(4);
-/// ```
-///
-/// compiles to this MIR
-///
-/// ```
-/// ((_1 as Some).0: i32) = const 4_i32;
-/// discriminant(_1) = 1;
-/// ```
-///
-/// However, `MaybeLiveLocals` **does** mark `x` (`_1`) as "killed" after a statement like this.
-/// That's because it treats the `SetDiscriminant` operation as a definition of `x`, even though
-/// the writes that actually initialized the locals happened earlier.
-///
-/// This makes `MaybeLiveLocals` unsuitable for certain classes of optimization normally associated
-/// with a live variables analysis, notably dead-store elimination. It's a dirty hack, but it works
-/// okay for the generator state transform (currently the main consumuer of this analysis).
-///
 /// [`MaybeBorrowedLocals`]: super::MaybeBorrowedLocals
 /// [flow-test]: https://github.com/rust-lang/rust/blob/a08c47310c7d49cbdc5d7afb38408ba519967ecd/src/test/ui/mir-dataflow/liveness-ptr.rs
 /// [liveness]: https://en.wikipedia.org/wiki/Live_variable_analysis
 pub struct MaybeLiveLocals;
 
 impl MaybeLiveLocals {
-    fn transfer_function<T>(&self, trans: &'a mut T) -> TransferFunction<'a, T> {
+    fn transfer_function<'a, T>(&self, trans: &'a mut T) -> TransferFunction<'a, T> {
         TransferFunction(trans)
     }
 }
 
-impl AnalysisDomain<'tcx> for MaybeLiveLocals {
+impl<'tcx> AnalysisDomain<'tcx> for MaybeLiveLocals {
     type Domain = BitSet<Local>;
     type Direction = Backward;
 
@@ -69,7 +45,7 @@ impl AnalysisDomain<'tcx> for MaybeLiveLocals {
     }
 }
 
-impl GenKillAnalysis<'tcx> for MaybeLiveLocals {
+impl<'tcx> GenKillAnalysis<'tcx> for MaybeLiveLocals {
     type Idx = Local;
 
     fn statement_effect(
@@ -94,13 +70,13 @@ impl GenKillAnalysis<'tcx> for MaybeLiveLocals {
         &self,
         trans: &mut impl GenKill<Self::Idx>,
         _block: mir::BasicBlock,
-        _func: &mir::Operand<'tcx>,
-        _args: &[mir::Operand<'tcx>],
-        dest_place: mir::Place<'tcx>,
+        return_places: CallReturnPlaces<'_, 'tcx>,
     ) {
-        if let Some(local) = dest_place.as_local() {
-            trans.kill(local);
-        }
+        return_places.for_each(|place| {
+            if let Some(local) = place.as_local() {
+                trans.kill(local);
+            }
+        });
     }
 
     fn yield_resume_effect(
@@ -161,18 +137,27 @@ impl DefUse {
         match context {
             PlaceContext::NonUse(_) => None,
 
-            PlaceContext::MutatingUse(MutatingUseContext::Store) => Some(DefUse::Def),
+            PlaceContext::MutatingUse(MutatingUseContext::Store | MutatingUseContext::Deinit) => {
+                Some(DefUse::Def)
+            }
+
+            // Setting the discriminant is not a use because it does no reading, but it is also not
+            // a def because it does not overwrite the whole place
+            PlaceContext::MutatingUse(MutatingUseContext::SetDiscriminant) => None,
 
             // `MutatingUseContext::Call` and `MutatingUseContext::Yield` indicate that this is the
             // destination place for a `Call` return or `Yield` resume respectively. Since this is
             // only a `Def` when the function returns successfully, we handle this case separately
             // in `call_return_effect` above.
-            PlaceContext::MutatingUse(MutatingUseContext::Call | MutatingUseContext::Yield) => None,
+            PlaceContext::MutatingUse(
+                MutatingUseContext::Call
+                | MutatingUseContext::AsmOutput
+                | MutatingUseContext::Yield,
+            ) => None,
 
             // All other contexts are uses...
             PlaceContext::MutatingUse(
                 MutatingUseContext::AddressOf
-                | MutatingUseContext::AsmOutput
                 | MutatingUseContext::Borrow
                 | MutatingUseContext::Drop
                 | MutatingUseContext::Retag,
