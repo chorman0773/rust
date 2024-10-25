@@ -1,3 +1,6 @@
+//@ reference: layout.repr.alignment.constraint-exclusive
+//@ reference: layout.repr.primitive.constraint
+
 #![allow(dead_code)]
 
 #[repr(C)]

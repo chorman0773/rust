@@ -1,4 +1,5 @@
 // See also repr-transparent.rs
+//@ reference: layout.repr.transparent.constraint-exclusive
 
 #[repr(transparent, C)] //~ ERROR cannot have other repr
 struct TransparentPlusC {

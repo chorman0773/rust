@@ -1,3 +1,5 @@
+//@ reference: layout.repr.alignment.constraint-alignment
+
 #![allow(dead_code)]
 
 #[repr(align(16.0))] //~ ERROR: invalid `repr(align)` attribute: not an unsuffixed integer

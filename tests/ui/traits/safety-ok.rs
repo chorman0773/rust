@@ -1,4 +1,5 @@
 //@ run-pass
+//@ reference: unsafe.trait.safety
 // Simple smoke test that unsafe traits can be compiled etc.
 
 

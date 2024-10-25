@@ -1,5 +1,6 @@
 //@ run-pass
 //@ compile-flags: -O
+//@ reference: layout.repr.primitive-c
 
 #![allow(dead_code)]
 

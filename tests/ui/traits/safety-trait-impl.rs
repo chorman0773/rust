@@ -1,3 +1,4 @@
+//@ reference: unsafe.impl
 // Check that unsafe traits require unsafe impls and that inherent
 // impls cannot be unsafe.
 

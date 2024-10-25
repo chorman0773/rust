@@ -1,3 +1,5 @@
+//@ reference: layout.repr.transparent.constraint-field
+
 use std::mem::size_of;
 
 #[repr(transparent)]

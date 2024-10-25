@@ -1,3 +1,5 @@
+//@ reference: layout.repr.attribute
+
 #![feature(repr_simd)]
 
 #[repr(C)] //~ ERROR: attribute should be applied to a struct, enum, or union

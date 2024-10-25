@@ -1,3 +1,5 @@
+//@ reference: safety.unsafe-call
+
 unsafe fn f() {
     return;
 }

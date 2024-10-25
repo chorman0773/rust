@@ -4,6 +4,8 @@
 //@ [edition2021] edition: 2021
 //@ [edition2024] compile-flags: -Z unstable-options
 //@ [edition2024] edition: 2024
+//@ reference: destructors.operation
+
 #![feature(let_chains)]
 #![cfg_attr(edition2024, feature(if_let_rescope))]
 
@@ -136,7 +138,8 @@ impl DropOrderCollector {
             && self.option_loud_drop(2).is_some() // 2
             && self.option_loud_drop(3).is_some() // 3
             && self.option_loud_drop(4).is_some() // 4
-            && self.option_loud_drop(5).is_some() // 5
+            && self.option_loud_drop(5).is_some()
+        // 5
         {
             self.print(6); // 6
         }
@@ -151,7 +154,8 @@ impl DropOrderCollector {
             && (self.option_loud_drop(12).is_some() // 2
             && self.option_loud_drop(13).is_some() // 3
             && self.option_loud_drop(14).is_some()) // 4
-            && self.option_loud_drop(15).is_some() // 5
+            && self.option_loud_drop(15).is_some()
+        // 5
         {
             self.print(16); // 6
         }
@@ -163,7 +167,8 @@ impl DropOrderCollector {
             || self.option_loud_drop(2).is_none() // 2
             || self.option_loud_drop(3).is_none() // 3
             || self.option_loud_drop(4).is_none() // 4
-            || self.option_loud_drop(5).is_some() // 5
+            || self.option_loud_drop(5).is_some()
+        // 5
         {
             self.print(6); // 6
         }
@@ -178,7 +183,8 @@ impl DropOrderCollector {
             || (self.option_loud_drop(12).is_none() // 2
             || self.option_loud_drop(13).is_none() // 3
             || self.option_loud_drop(14).is_none()) // 4
-            || self.option_loud_drop(15).is_some() // 5
+            || self.option_loud_drop(15).is_some()
+        // 5
         {
             self.print(16); // 6
         }
@@ -192,7 +198,8 @@ impl DropOrderCollector {
             && self.option_loud_drop(4).is_some() // 4
             && self.option_loud_drop(5).is_none() // 5
             || self.option_loud_drop(6).is_none() // 6
-            || self.option_loud_drop(7).is_some() // 7
+            || self.option_loud_drop(7).is_some()
+        // 7
         {
             self.print(8); // 8
         }
@@ -202,7 +209,9 @@ impl DropOrderCollector {
         // take the "then" branch
         if self.option_loud_drop(1).is_some() // 1
             && self.option_loud_drop(2).is_some() // 2
-            && let Some(_d) = self.option_loud_drop(4) { // 4
+            && let Some(_d) = self.option_loud_drop(4)
+        {
+            // 4
             self.print(3); // 3
         }
 
@@ -210,7 +219,9 @@ impl DropOrderCollector {
         // take the "else" branch
         if self.option_loud_drop(5).is_some() // 1
             && self.option_loud_drop(6).is_some() // 2
-            && let None = self.option_loud_drop(8) { // 4
+            && let None = self.option_loud_drop(8)
+        {
+            // 4
             unreachable!();
         } else {
             self.print(7); // 3
@@ -219,7 +230,9 @@ impl DropOrderCollector {
         // take the "else" branch
         if self.option_loud_drop(5).is_some() // 1
             && self.option_loud_drop(6).is_some() // 2
-            && let None = self.option_loud_drop(7) { // 4
+            && let None = self.option_loud_drop(7)
+        {
+            // 4
             unreachable!();
         } else {
             self.print(8); // 3
@@ -229,7 +242,9 @@ impl DropOrderCollector {
         if self.option_loud_drop(9).is_some() // 1
             && let Some(_d) = self.option_loud_drop(13) // 5
             && self.option_loud_drop(10).is_some() // 2
-            && let Some(_e) = self.option_loud_drop(12) { // 4
+            && let Some(_e) = self.option_loud_drop(12)
+        {
+            // 4
             self.print(11); // 3
         }
 
@@ -237,16 +252,20 @@ impl DropOrderCollector {
         if let Some(_d) = self.option_loud_drop(18) // 5
             && let Some(_e) = self.option_loud_drop(17) // 4
             && self.option_loud_drop(14).is_some() // 1
-            && self.option_loud_drop(15).is_some() { // 2
-                self.print(16); // 3
-            }
+            && self.option_loud_drop(15).is_some()
+        {
+            // 2
+            self.print(16); // 3
+        }
 
         // let exprs last
         if self.option_loud_drop(19).is_some() // 1
             && self.option_loud_drop(20).is_some() // 2
             && let Some(_d) = self.option_loud_drop(23) // 5
-            && let Some(_e) = self.option_loud_drop(22) { // 4
-                self.print(21); // 3
+            && let Some(_e) = self.option_loud_drop(22)
+        {
+            // 4
+            self.print(21); // 3
         }
     }
 
@@ -254,7 +273,8 @@ impl DropOrderCollector {
         let mut v = self.option_loud_drop(4);
         while let Some(_d) = v
             && self.option_loud_drop(1).is_some()
-            && self.option_loud_drop(2).is_some() {
+            && self.option_loud_drop(2).is_some()
+        {
             self.print(3);
             v = None;
         }

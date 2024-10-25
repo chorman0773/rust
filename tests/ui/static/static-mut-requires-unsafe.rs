@@ -1,3 +1,4 @@
+//@ reference: safety.unsafe-static
 static mut a: isize = 3;
 
 fn main() {

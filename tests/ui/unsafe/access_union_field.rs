@@ -1,3 +1,4 @@
+//@ reference: safety.unsafe-union-access
 #![allow(unused_variables)]
 
 union Foo {

@@ -1,3 +1,5 @@
+//@ reference: layout.repr.alignment.constraint-exclusive
+
 #![allow(dead_code)]
 
 #[repr(align(16))]

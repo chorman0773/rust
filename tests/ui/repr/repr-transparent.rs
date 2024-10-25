@@ -2,6 +2,7 @@
 // that are reported earlier and therefore preempt these are tested in:
 // - repr-transparent-other-reprs.rs
 // - repr-transparent-other-items.rs
+//@ reference: layout.repr.transparent.constraint-field
 
 #![feature(transparent_unions)]
 
